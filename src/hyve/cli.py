@@ -1,10 +1,11 @@
-import logging
-import yaml
 import argparse
+import logging
 import sys
 
-from hyve.hydrostats.stat_calc import stat_calc
+import yaml
+
 from hyve.extraction import extractor
+from hyve.hydrostats.stat_calc import stat_calc
 
 logger = logging.getLogger(__name__)
 
@@ -37,5 +38,7 @@ if __name__ == "__main__":
     if tool_name in tools:
         tools[tool_name](sys.argv[2:])
     else:
-        logger.error(f"Tool '{tool_name}' not found. Available tools: {', '.join(tools.keys())}")
+        logger.error(
+            f"Tool '{tool_name}' not found. Available tools: {', '.join(tools.keys())}"
+        )
         sys.exit(1)

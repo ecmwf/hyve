@@ -1,10 +1,11 @@
 """Unit tests for the extractor function."""
 
-import pytest
-import pandas as pd
-import numpy as np
-import xarray as xr
 from unittest.mock import Mock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
 
 from hyve.extraction import extractor
 
@@ -125,8 +126,12 @@ def test_extractor_with_temperature(dummy_grid_data, station_csv_file, mapping_c
 
     # Station A: indices [1,2] -> values [17.0, 37.0]
     # Station B: indices [2,3] -> values [23.0, 43.0]
-    np.testing.assert_allclose(result_ds["temperature"].sel(station="STATION_A").values, [17.0, 37.0])
-    np.testing.assert_allclose(result_ds["temperature"].sel(station="STATION_B").values, [23.0, 43.0])
+    np.testing.assert_allclose(
+        result_ds["temperature"].sel(station="STATION_A").values, [17.0, 37.0]
+    )
+    np.testing.assert_allclose(
+        result_ds["temperature"].sel(station="STATION_B").values, [23.0, 43.0]
+    )
 
 
 def test_extractor_with_station_filter(dummy_grid_data, tmp_path):
@@ -185,7 +190,9 @@ def test_extractor_rejects_both_index_and_coords(dummy_grid_data, station_csv_fi
         },
     }
 
-    with pytest.raises(ValueError, match="must use either 'index' or 'coords', not both"):
+    with pytest.raises(
+        ValueError, match="must use either 'index' or 'coords', not both"
+    ):
         extractor(config)
 
 
@@ -233,7 +240,9 @@ def test_extractor_with_output_file(dummy_grid_data, station_csv_file, tmp_path)
 def test_extractor_with_empty_stations(dummy_grid_data, tmp_path):
     """Test that extractor raises clear error for empty station list."""
     empty_csv = tmp_path / "empty_stations.csv"
-    pd.DataFrame(columns=["station_id", "opt_x_index", "opt_y_index"]).to_csv(empty_csv, index=False)
+    pd.DataFrame(columns=["station_id", "opt_x_index", "opt_y_index"]).to_csv(
+        empty_csv, index=False
+    )
 
     config = {
         "station": {
@@ -258,7 +267,11 @@ def test_extractor_gribjump(mock_from_source, tmp_path):
     # Mock returns object with to_xarray() that returns minimal dataset
     mock_source = Mock()
     mock_source.to_xarray.return_value = xr.Dataset(
-        {"temperature": xr.DataArray([[15.0, 25.0], [35.0, 45.0]], dims=["index", "time"])}
+        {
+            "temperature": xr.DataArray(
+                [[15.0, 25.0], [35.0, 45.0]], dims=["index", "time"]
+            )
+        }
     )
     mock_from_source.return_value = mock_source
 
@@ -273,14 +286,22 @@ def test_extractor_gribjump(mock_from_source, tmp_path):
 
     config = {
         "station": {"file": str(csv_file), "name": "name", "index_1d": "idx"},
-        "grid": {"source": {"gribjump": {"request": {"class": "od", "expver": "0001", "stream": "oper"}}}},
+        "grid": {
+            "source": {
+                "gribjump": {
+                    "request": {"class": "od", "expver": "0001", "stream": "oper"}
+                }
+            }
+        },
     }
 
     result = extractor(config)
 
     # Verify earthkit.data.from_source was called correctly
     mock_from_source.assert_called_once_with(
-        "gribjump", request={"class": "od", "expver": "0001", "stream": "oper"}, ranges=[(100, 101), (200, 201)]
+        "gribjump",
+        request={"class": "od", "expver": "0001", "stream": "oper"},
+        ranges=[(100, 101), (200, 201)],
     )
 
     # Verify output

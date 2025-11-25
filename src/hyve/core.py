@@ -1,5 +1,6 @@
 import earthkit.data as ekd
 
+
 def find_main_var(ds, min_dim=2):
     """
     Find the main variable in the dataset.
@@ -28,7 +29,6 @@ def find_main_var(ds, min_dim=2):
         raise ValueError("No variable of dimension >= {min_dim} in dataset.")
     else:
         return variable_names[0]
-
 
 
 def load_da(ds_config, n_dims):
