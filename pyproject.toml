@@ -28,3 +28,7 @@ dev = [
     "pytest-cov",
     "pre-commit",
 ]
+
+[project.scripts]
+    hyve-extract-timeseries = "hyve.cli:extractor_cli"
+    hyve-hydrostats = "hyve.cli:stat_calc_cli"
