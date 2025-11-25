@@ -3,7 +3,7 @@ requires = ["setuptools>=65", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hydro_analysis_toolkit"
+name = "hyve"
 requires-python = ">=3.10"
 authors = [
     {name = "European Centre for Medium-Range Weather Forecasts (ECMWF)", email = "software.support@ecmwf.int"},
@@ -35,3 +35,14 @@ gribjump = [
 [project.scripts]
     hyve-extract-timeseries = "hyve.cli:extractor_cli"
     hyve-hydrostats = "hyve.cli:stat_calc_cli"
+
+[tool.black]
+line-length = 88
+skip-string-normalization = false
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
