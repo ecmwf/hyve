@@ -182,7 +182,7 @@ def test_extractor_rejects_both_index_and_coords(dummy_grid_data, station_csv_fi
             "file": station_csv_file,
             "name": "station_id",
             "index": {"x": "opt_x_index", "y": "opt_y_index"},
-            "coords": {"x": "opt_x_coord", "y": "opt_y_coord"},  # Both provided
+            "coords": {"x": "opt_x_coord", "y": "opt_y_coord"},
         },
         "grid": {
             "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},

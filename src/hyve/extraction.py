@@ -122,13 +122,15 @@ def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
         "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
     ):
         raise ValueError(
-            "Station file missing required index columns. Expected columns to map to 'x_index' and 'y_index'."
+            "Station file missing required index columns."
+            "Expected columns to map to 'x_index' and 'y_index'."
         )
     if has_coords and (
         "x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns
     ):
         raise ValueError(
-            "Station file missing required coordinate columns. Expected columns to map to 'x_coord' and 'y_coord'."
+            "Station file missing required coordinate columns."
+            "Expected columns to map to 'x_coord' and 'y_coord'."
         )
     if has_index_1d and "index_1d" not in df_renamed.columns:
         raise ValueError("Station file missing required 'index_1d' column.")
@@ -141,7 +143,9 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
         raise ValueError("Gribjump source requires 'index_1d' in station config.")
 
     station_names = df["station_name"].values
-    unique_indices, duplication_indexes = np.unique(df["index_1d"].values, return_inverse=True)  # type: ignore[call-overload]
+    unique_indices, duplication_indexes = np.unique(
+        df["index_1d"].values, return_inverse=True
+    )  # type: ignore[call-overload]
 
     # Converting indices to ranges is currently faster than using indices
     # directly. This is a problem in the earthkit-data gribjump source and will
