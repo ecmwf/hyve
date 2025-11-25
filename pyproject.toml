@@ -12,6 +12,10 @@ license = { text = "Apache License Version 2.0" }
 dynamic = ["version"]
 
 dependencies = [
+    "numpy",
+    "pandas",
+    "xarray",
+    "earthkit-data>=0.18.2",
 ]
 
 [project.optional-dependencies]
