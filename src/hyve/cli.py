@@ -33,7 +33,7 @@ if __name__ == "__main__":
     from importlib.metadata import entry_points
 
     eps = entry_points().select(group="console_scripts")
-    tools = {ep.name: ep.load() for ep in eps if ep.module.startswith("hat.")}
+    tools = {ep.name: ep.load() for ep in eps if ep.module.startswith("hyve.")}
     tool_name = sys.argv[1]
     if tool_name in tools:
         tools[tool_name](sys.argv[2:])
