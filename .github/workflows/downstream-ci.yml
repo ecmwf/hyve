@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - 'main'
-      - 'develop'
     tags-ignore:
       - '**'
 
@@ -25,15 +24,15 @@ jobs:
     if: ${{ !github.event.pull_request.head.repo.fork && github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci' }}
     uses: ecmwf/downstream-ci/.github/workflows/downstream-ci.yml@feat/hyve
     with:
-      earthkit-hydro: ecmwf/hyve@${{ github.event.pull_request.head.sha || github.sha }}
+      hyve: ecmwf/hyve@${{ github.event.pull_request.head.sha || github.sha }}
       codecov_upload: true
       python_qa: true
     secrets: inherit
 
   # Build downstream packages on HPC
-  downstream-ci-hpc:
-    if: ${{ !github.event.pull_request.head.repo.fork && github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci' }}
-    uses: ecmwf/downstream-ci/.github/workflows/downstream-ci-hpc.yml@feat/hyve
-    with:
-      earthkit-hydro: ecmwf/hyve@${{ github.event.pull_request.head.sha || github.sha }}
-    secrets: inherit
+  # downstream-ci-hpc:
+  #   if: ${{ !github.event.pull_request.head.repo.fork && github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci' }}
+  #   uses: ecmwf/downstream-ci/.github/workflows/downstream-ci-hpc.yml@feat/hyve
+  #   with:
+  #     hyve: ecmwf/hyve@${{ github.event.pull_request.head.sha || github.sha }}
+  #   secrets: inherit

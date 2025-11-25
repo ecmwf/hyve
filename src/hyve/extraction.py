@@ -1,12 +1,14 @@
-from dask.diagnostics import ProgressBar
-import pandas as pd
-import xarray as xr
-import numpy as np
-import earthkit.data as ekd
 import logging
 from typing import Any
 
+import earthkit.data as ekd
+import numpy as np
+import pandas as pd
+import xarray as xr
+from dask.diagnostics import ProgressBar
+
 logger = logging.getLogger(__name__)
+
 
 def find_main_var(ds, min_dim=2):
     """
@@ -36,6 +38,7 @@ def find_main_var(ds, min_dim=2):
         raise ValueError("No variable of dimension >= {min_dim} in dataset.")
     else:
         return variable_names[0]
+
 
 def load_da(ds_config, n_dims):
     src_name = list(ds_config["source"].keys())[0]
@@ -71,7 +74,12 @@ def create_mask_from_index(df, shape):
     logger.debug(f"DataFrame columns: {df.columns.tolist()}")
     x_indices = df["x_index"].values
     y_indices = df["y_index"].values
-    if np.any(x_indices < 0) or np.any(x_indices >= shape[0]) or np.any(y_indices < 0) or np.any(y_indices >= shape[1]):
+    if (
+        np.any(x_indices < 0)
+        or np.any(x_indices >= shape[0])
+        or np.any(y_indices < 0)
+        or np.any(y_indices >= shape[1])
+    ):
         raise ValueError(
             f"Station indices out of grid bounds. Grid shape={shape}, "
             f"x_index range=({int(x_indices.min())},{int(x_indices.max())}), "
@@ -100,7 +108,9 @@ def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
     """Read, filter, and normalize station DataFrame to canonical column names."""
     logger.debug(f"Reading station file, {station_config}")
     if "name" not in station_config:
-        raise ValueError("Station config must include a 'name' key mapping to the station column")
+        raise ValueError(
+            "Station config must include a 'name'" "key mapping to the station column"
+        )
     df = pd.read_csv(station_config["file"])
     filters = station_config.get("filter")
     if filters is not None:
@@ -116,9 +126,13 @@ def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
 
     if not has_index_1d:
         if has_index and has_coords:
-            raise ValueError("Station config must use either 'index' or 'coords', not both.")
+            raise ValueError(
+                "Station config must use either 'index' or 'coords', not both."
+            )
         if not has_index and not has_coords:
-            raise ValueError("Station config must provide either 'index' or 'coords' for station mapping.")
+            raise ValueError(
+                "Station config must provide either 'index' or 'coords' for station mapping."
+            )
 
     renames = {}
     renames[station_config["name"]] = "station_name"
@@ -142,13 +156,19 @@ def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
 
     df_renamed = df.rename(columns=renames)
 
-    if has_index and ("x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns):
+    if has_index and (
+        "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
+    ):
         raise ValueError(
-            "Station file missing required index columns. Expected columns to map to 'x_index' and 'y_index'."
+            "Station file missing required index columns."
+            "Expected columns to map to 'x_index' and 'y_index'."
         )
-    if has_coords and ("x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns):
+    if has_coords and (
+        "x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns
+    ):
         raise ValueError(
-            "Station file missing required coordinate columns. Expected columns to map to 'x_coord' and 'y_coord'."
+            "Station file missing required coordinate columns."
+            "Expected columns to map to 'x_coord' and 'y_coord'."
         )
     if has_index_1d and "index_1d" not in df_renamed.columns:
         raise ValueError("Station file missing required 'index_1d' column.")
@@ -161,7 +181,9 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
         raise ValueError("Gribjump source requires 'index_1d' in station config.")
 
     station_names = df["station_name"].values
-    unique_indices, duplication_indexes = np.unique(df["index_1d"].values, return_inverse=True)  # type: ignore[call-overload]
+    unique_indices, duplication_indexes = np.unique(
+        df["index_1d"].values, return_inverse=True
+    )  # type: ignore[call-overload]
 
     # Converting indices to ranges is currently faster than using indices
     # directly. This is a problem in the earthkit-data gribjump source and will
@@ -199,7 +221,9 @@ def _process_regular(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datase
     if use_index:
         mask, duplication_indexes = create_mask_from_index(df, shape)
     else:
-        mask, duplication_indexes = create_mask_from_coords(df, da[x_dim].values, da[y_dim].values, shape)
+        mask, duplication_indexes = create_mask_from_coords(
+            df, da[x_dim].values, da[y_dim].values, shape
+        )
 
     logger.info("Extracting timeseries at selected stations")
     masked_da = apply_mask(da, mask, x_dim, y_dim)
@@ -211,7 +235,9 @@ def _process_regular(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datase
     return ds
 
 
-def process_inputs(station_config: dict[str, Any], grid_config: dict[str, Any]) -> xr.Dataset:
+def process_inputs(
+    station_config: dict[str, Any], grid_config: dict[str, Any]
+) -> xr.Dataset:
     df = parse_stations(station_config)
     if "gribjump" in grid_config.get("source", {}):
         return _process_gribjump(grid_config, df)
@@ -222,7 +248,9 @@ def mask_array_np(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return arr[..., mask]
 
 
-def apply_mask(da: xr.DataArray, mask: np.ndarray, coordx: str, coordy: str) -> xr.DataArray:
+def apply_mask(
+    da: xr.DataArray, mask: np.ndarray, coordx: str, coordy: str
+) -> xr.DataArray:
     task = xr.apply_ufunc(
         mask_array_np,
         da,
