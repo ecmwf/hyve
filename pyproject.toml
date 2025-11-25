@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=65", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hydro_analysis_toolkit"
+requires-python = ">=3.10"
+authors = [
+    {name = "European Centre for Medium-Range Weather Forecasts (ECMWF)", email = "software.support@ecmwf.int"},
+]
+license = { text = "Apache License Version 2.0" }
+dynamic = ["version"]
+
+dependencies = [
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pre-commit",
+]
