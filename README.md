@@ -1,3 +1,5 @@
+# Hyve
+
 <p align="center">
     <a href="https://github.com/ecmwf/codex/raw/refs/heads/main/ESEE">
         <img src="https://github.com/ecmwf/codex/raw/refs/heads/main/ESEE/foundation_badge.svg" alt="ECMWF Software EnginE">
@@ -15,10 +17,9 @@
 
 <p align="center">
   <a href="#installation">Installation</a> *
-  <a href="#development">Development</a> *
+  <a href="#development">Development</a>
 </p>
 
-# Hyve
 
 [![Static Badge](https://github.com/ecmwf/codex/raw/refs/heads/main/Project%20Maturity/emerging_badge.svg)](https://github.com/ecmwf/codex/raw/refs/heads/main/Project%20Maturity#emerging)
 
