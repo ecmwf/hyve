@@ -28,6 +28,9 @@ dev = [
     "pytest-cov",
     "pre-commit",
 ]
+gribjump = [
+    "earthkit-data[gribjump]"
+]
 
 [project.scripts]
     hyve-extract-timeseries = "hyve.cli:extractor_cli"
