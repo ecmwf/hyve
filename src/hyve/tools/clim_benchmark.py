@@ -171,7 +171,7 @@ def compute_climatology(p_values, n_days, window, freq, stride, dates, dis):
     return clim
 
 
-if __name__ == "__main__":
+def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")

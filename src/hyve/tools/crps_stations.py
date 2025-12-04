@@ -194,7 +194,7 @@ def compute_score(
     assert count == n_dates
 
 
-if __name__ == "__main__":
+def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")
