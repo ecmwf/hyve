@@ -35,6 +35,8 @@ gribjump = [
 [project.scripts]
     hyve-extract-timeseries = "hyve.cli:extractor_cli"
     hyve-hydrostats = "hyve.cli:stat_calc_cli"
+    hyve-clim-benchmark = "hyve.tools.clim_benchmark:main"
+    hyve-crps-stations = "hyve.tools.crps_stations:main"
 
 [tool.black]
 line-length = 88
