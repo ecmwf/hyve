@@ -66,7 +66,7 @@ def compute_score(
     print("\nComputing crps and crpss\n")
 
     reforecast_files = glob.glob(reforecast_dir + "/*.nc")
-    da_ref = xr.open_dataset(os.path.join(args.reforecast, reforecast_files[0]))
+    da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
     set1 = set(da_ref.station.values)
     set2 = set(ds_reanalysis.station.values)
     stations = list(set1.intersection(set2))
@@ -85,7 +85,7 @@ def compute_score(
     for reforecast_path in reforecast_files:
 
         log.info("- {}: {}".format(count, reforecast_path))
-        ds_reforecast = xr.open_dataset(os.path.join(args.reforecast, reforecast_path))
+        ds_reforecast = xr.open_dataset(os.path.join(reforecast_dir, reforecast_path))
 
         set1 = set(ds_reforecast.station.values)
         set2 = set(ds_reanalysis.station.values)
