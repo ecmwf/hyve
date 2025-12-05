@@ -85,7 +85,6 @@ def dates_range(dates, window, n_years, n_dates, day, ihour, freq, stride):
     date_index = day * freq + ihour
 
     index_range = np.arange(0, window, stride, dtype=int)[None, :]
-    # index_range[:, 2] = -1
     index_range = index_range[index_range >= 0]
     indexer = (
         date_index
@@ -113,7 +112,6 @@ def coord_leap_year_dmh(freq):
     dates_str = np.datetime_as_string(dates, unit="h")
 
     print(dates_str)
-    # days_months = np.char.replace(dates_str, '2020-', '')
     days_months = [date[5:] for date in dates_str]
 
     return days_months
@@ -240,7 +238,6 @@ def main():
     step_window = window * freq - (window * freq) % stride + 1
 
     # considering statistics on a leap year
-    n_days_w_leap = 366
     n_days = args.n_days
 
     # percentiles
@@ -262,7 +259,6 @@ def main():
         log.info("discharge dataset {}".format(dis))
 
         dates = clim_dates(dis.time.values, step_window)
-        dates_index = np.arange(dates.size, dtype=int)
 
         clim = compute_climatology(
             p_values, n_days, step_window, freq, stride, dates, dis, core_dim
