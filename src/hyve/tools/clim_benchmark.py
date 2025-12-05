@@ -119,7 +119,7 @@ def coord_leap_year_dmh(freq):
     return days_months
 
 
-def compute_climatology(p_values, n_days, window, freq, stride, dates, dis):
+def compute_climatology(p_values, n_days, window, freq, stride, dates, dis, core_dim):
 
     # get dates stats
     n_days_wo_leap = 365
@@ -265,7 +265,7 @@ def main():
         dates_index = np.arange(dates.size, dtype=int)
 
         clim = compute_climatology(
-            p_values, n_days, step_window, freq, stride, dates, dis
+            p_values, n_days, step_window, freq, stride, dates, dis, core_dim
         )
 
         clim.to_netcdf(args.output)
