@@ -112,16 +112,6 @@ def compute_score(
         reanalysis = ds_reanalysis.sel(time=date_range)
         persistence = ds_reanalysis.sel(time=date_persistence)
 
-        # num = 10
-        # print(reforecast.isel(station=num, time=1).values)
-        # print(reanalysis.isel(station=num, time=1))
-        # print(persistence.isel(station=num))
-        # compute statistics for one forecast date
-        # print(reanalysis.station.values)
-        # print(reforecast.station.values)
-        # for i in range(len(reanalysis.station.values)):
-        #     print(reanalysis.station.values[i], reforecast.station.values[i])
-        #     assert reforecast.station.values[i] == reanalysis.station.values[i]
         crps_pers = persistence_crps(reanalysis, persistence)
         crps_refo = stats.forecast_crps(reforecast, reanalysis, core_dims=core_dims)
         if ds_clim is not None:
@@ -136,10 +126,6 @@ def compute_score(
             )
         else:
             crps_refo, crps_pers = dask.compute(crps_refo, crps_pers)
-
-        # print(crps_refo.isel(station=num, time=1).values)
-        # print(crps_pers.isel(station=num, time=1).values)
-        # exit(1)
 
         # write forecast files
         if out_dir:
