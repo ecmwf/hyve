@@ -66,7 +66,7 @@ def compute_score(
     print("\nComputing crps and crpss\n")
 
     reforecast_files = glob.glob(reforecast_dir + "/*.nc")
-    da_ref = xr.open_dataset(os.path.join(args.reforecast, reforecast_files[0]))
+    da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
     set1 = set(da_ref.station.values)
     set2 = set(ds_reanalysis.station.values)
     stations = list(set1.intersection(set2))
@@ -85,7 +85,7 @@ def compute_score(
     for reforecast_path in reforecast_files:
 
         log.info("- {}: {}".format(count, reforecast_path))
-        ds_reforecast = xr.open_dataset(os.path.join(args.reforecast, reforecast_path))
+        ds_reforecast = xr.open_dataset(os.path.join(reforecast_dir, reforecast_path))
 
         set1 = set(ds_reforecast.station.values)
         set2 = set(ds_reanalysis.station.values)
@@ -112,16 +112,6 @@ def compute_score(
         reanalysis = ds_reanalysis.sel(time=date_range)
         persistence = ds_reanalysis.sel(time=date_persistence)
 
-        # num = 10
-        # print(reforecast.isel(station=num, time=1).values)
-        # print(reanalysis.isel(station=num, time=1))
-        # print(persistence.isel(station=num))
-        # compute statistics for one forecast date
-        # print(reanalysis.station.values)
-        # print(reforecast.station.values)
-        # for i in range(len(reanalysis.station.values)):
-        #     print(reanalysis.station.values[i], reforecast.station.values[i])
-        #     assert reforecast.station.values[i] == reanalysis.station.values[i]
         crps_pers = persistence_crps(reanalysis, persistence)
         crps_refo = stats.forecast_crps(reforecast, reanalysis, core_dims=core_dims)
         if ds_clim is not None:
@@ -136,10 +126,6 @@ def compute_score(
             )
         else:
             crps_refo, crps_pers = dask.compute(crps_refo, crps_pers)
-
-        # print(crps_refo.isel(station=num, time=1).values)
-        # print(crps_pers.isel(station=num, time=1).values)
-        # exit(1)
 
         # write forecast files
         if out_dir:
@@ -194,7 +180,7 @@ def compute_score(
     assert count == n_dates
 
 
-if __name__ == "__main__":
+def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")
