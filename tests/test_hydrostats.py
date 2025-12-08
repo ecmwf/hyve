@@ -1,78 +1,190 @@
-"""Unit tests for stat_calc."""
-
-from unittest.mock import MagicMock, patch
-
 import numpy as np
-import pandas as pd
 import pytest
-import xarray as xr
 
 from hyve.hydrostats.stat_calc import stat_calc
 
 
 @pytest.fixture
-def sim_discharge():
-    """Sim: stations [A, B, C], times [Jan 1-3], values = station_idx + time_idx * 0.1."""
-    return xr.Dataset(
-        {"discharge": (["time", "station"], [
-            [0.0, 1.0, 2.0],
-            [0.1, 1.1, 2.1],
-            [0.2, 1.2, 2.2],
-        ])},
-        coords={
-            "time": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-            "station": ["A", "B", "C"],
-        },
-    )
+def sim_source_config():
+    """Sim: station 1 = [1, 2], station 2 = [1, 2]."""
+    return {
+        "list-of-dicts": {
+            "list_of_dicts": [
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 1,
+                    "param": "dis",
+                    "values": [1.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 1,
+                    "param": "dis",
+                    "values": [2.0],
+                },
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 2,
+                    "param": "dis",
+                    "values": [1.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 2,
+                    "param": "dis",
+                    "values": [2.0],
+                },
+                # Stations that only exist in sim should be ignored
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 3,
+                    "param": "dis",
+                    "values": [999.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 3,
+                    "param": "dis",
+                    "values": [999.0],
+                },
+                # Times that only exist in sim should be ignored
+                {
+                    "date": 20240101,
+                    "time": 6,
+                    "number": 1,
+                    "param": "dis",
+                    "values": [100.0],
+                },
+                {
+                    "date": 20240101,
+                    "time": 6,
+                    "number": 2,
+                    "param": "dis",
+                    "values": [500.0],
+                },
+                {
+                    "date": 20240101,
+                    "time": 6,
+                    "number": 3,
+                    "param": "dis",
+                    "values": [999.0],
+                },
+            ]
+        }
+    }
 
 
 @pytest.fixture
-def obs_discharge():
-    """Obs: stations [B, C, D], times [Jan 2-4], values = sim + 0.5 at intersection."""
-    return xr.Dataset(
-        {"dis": (["time", "station"], [
-            [1.6, 2.6, 3.6],
-            [1.7, 2.7, 3.7],
-            [1.8, 2.8, 3.8],
-        ])},
-        coords={
-            "time": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
-            "station": ["B", "C", "D"],
-        },
-    )
+def obs_source_config():
+    """Obs: station 1 = [1, 2] (identical), station 2 = [2, 1] (inverted)."""
+    return {
+        "list-of-dicts": {
+            "list_of_dicts": [
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 1,
+                    "param": "discharge",
+                    "values": [1.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 1,
+                    "param": "discharge",
+                    "values": [2.0],
+                },
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 2,
+                    "param": "discharge",
+                    "values": [2.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 2,
+                    "param": "discharge",
+                    "values": [1.0],
+                },
+                # Stations that only exist in obs should be ignored
+                {
+                    "date": 20240101,
+                    "time": 0,
+                    "number": 4,
+                    "param": "discharge",
+                    "values": [999.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 0,
+                    "number": 4,
+                    "param": "discharge",
+                    "values": [999.0],
+                },
+                # Times that only exist in obs should be ignored
+                {
+                    "date": 20240102,
+                    "time": 6,
+                    "number": 1,
+                    "param": "discharge",
+                    "values": [100.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 6,
+                    "number": 2,
+                    "param": "discharge",
+                    "values": [500.0],
+                },
+                {
+                    "date": 20240102,
+                    "time": 6,
+                    "number": 4,
+                    "param": "discharge",
+                    "values": [999.0],
+                },
+            ]
+        }
+    }
 
 
-def test_stat_calc_partial_overlap(sim_discharge, obs_discharge):
-    """Test stat_calc computes MAE and correlation on station/time intersection."""
+def test_stat_calc(sim_source_config, obs_source_config):
+    """Test stat_calc with synthetic data.
+
+    Simulated and observed data each have two stations and two times in common.
+    Station 1 has identical values in sim and obs, leading to MAE=0 and correlation=1.
+    Station 2 has inverted values in sim and obs, leading to MAE=1 and correlation=-1.
+
+    The test checks that only the common stations and times are considered, and that
+    the calculated statistics match the expected results.
+
+    Albeit a bit hacky, this test uses the list-of-dicts data source for
+    simplicity and uses the ensemble member dimension to represent stations.
+    """
     config = {
         "sim": {
-            "source": {"netcdf": {"path": "sim.nc"}},
-            "var": "discharge",
-            "coords": {"s": "station", "t": "time"},
+            "source": sim_source_config,
+            "coords": {"s": "number", "t": "forecast_reference_time"},
         },
         "obs": {
-            "source": {"netcdf": {"path": "obs.nc"}},
-            "var": "discharge",
-            "coords": {"s": "station", "t": "time"},
+            "source": obs_source_config,
+            "to_xarray_options": {"time_dim_mode": "valid_time"},
+            "coords": {"s": "number", "t": "valid_time"},
         },
         "stats": ["mae", "correlation"],
         "output": {"coords": {"s": "station", "t": "time"}},
     }
 
-    sim_source = MagicMock()
-    sim_source.to_xarray.return_value = sim_discharge
-    obs_source = MagicMock()
-    obs_source.to_xarray.return_value = obs_discharge
+    result = stat_calc(config)
 
-    with patch(
-        "earthkit.data.from_source", side_effect=[sim_source, obs_source]
-    ) as mock_from_source:
-        result = stat_calc(config)
-
-    assert mock_from_source.call_count == 2
-    mock_from_source.assert_any_call("netcdf", path="sim.nc")
-    mock_from_source.assert_any_call("netcdf", path="obs.nc")
-
-    assert set(result["station"].values) == {"B", "C"}
-    np.testing.assert_allclose(result["mae"].values, [0.5, 0.5])
-    np.testing.assert_allclose(result["correlation"].values, [1.0, 1.0])
+    assert set(result["station"].values) == {1, 2}
+    np.testing.assert_allclose(result["mae"].values.squeeze(), [0.0, 1.0])
+    np.testing.assert_allclose(result["correlation"].values.squeeze(), [1.0, -1.0])
