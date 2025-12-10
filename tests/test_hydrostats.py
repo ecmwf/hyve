@@ -78,9 +78,9 @@ def test_stat_calc(simulation_source_config, observation_source_config):
 
     result = stat_calc(config)
 
-    assert set(result["station"].values) == {1, 2}
-    np.testing.assert_allclose(result["mae"].values.squeeze(), [0.0, 1.0])
-    np.testing.assert_allclose(result["correlation"].values.squeeze(), [1.0, -1.0])
+    assert set(result["station"].to_numpy()) == {1, 2}
+    np.testing.assert_allclose(result["mae"].to_numpy().ravel(), [0.0, 1.0])
+    np.testing.assert_allclose(result["correlation"].to_numpy().ravel(), [1.0, -1.0])
 
 
 def test_stat_calc_with_nans():
@@ -172,12 +172,12 @@ def test_stat_calc_with_nans():
     result = stat_calc(config)
 
     # Station 1: sim=[1.0, -1.0], obs=[1.0, nan] -> mae=0.0, br=0.0
-    np.testing.assert_allclose(result["mae"].sel(station=1).values.squeeze(), 0.0)
-    np.testing.assert_allclose(result["br"].sel(station=1).values.squeeze(), 0.0)
+    np.testing.assert_allclose(result["mae"].sel(station=1).to_numpy(), 0.0)
+    np.testing.assert_allclose(result["br"].sel(station=1).to_numpy(), 0.0)
 
     # Station 2: sim=[1.0, nan], obs=[nan, 2.0] -> mae=nan, br=0.5
-    assert np.isnan(result["mae"].sel(station=2).values.squeeze())
-    np.testing.assert_allclose(result["br"].sel(station=2).values.squeeze(), 0.5)
+    assert np.isnan(result["mae"].sel(station=2).to_numpy())
+    np.testing.assert_allclose(result["br"].sel(station=2).to_numpy(), 0.5)
 
     # Station 3: sim=[nan, nan], obs=[nan, 1.0] -> mae=nan, br=nan
     assert np.isnan(result["mae"].sel(station=3).to_numpy())
