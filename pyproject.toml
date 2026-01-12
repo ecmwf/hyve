@@ -36,6 +36,13 @@ gribjump = [
     hyve-extract-timeseries = "hyve.cli:extractor_cli"
     hyve-hydrostats = "hyve.cli:stat_calc_cli"
 
+[tool.pytest]
+filterwarnings = [
+	# This warning is raised due to netcdf4 but likely is harmless. See
+	# https://github.com/Unidata/netcdf4-python/issues/1354 for more context.
+	"ignore:numpy.ndarray size changed"
+]
+
 [tool.black]
 line-length = 88
 skip-string-normalization = false

@@ -24,9 +24,11 @@ def find_main_var(ds, min_dim=2):
     """
     variable_names = [k for k in ds.variables if len(ds.variables[k].dims) >= min_dim]
     if len(variable_names) > 1:
-        raise ValueError("More than one variable of dimension >= {min_dim} in dataset.")
+        raise ValueError(
+            f"More than one variable of dimension >= {min_dim} in dataset."
+        )
     elif len(variable_names) == 0:
-        raise ValueError("No variable of dimension >= {min_dim} in dataset.")
+        raise ValueError(f"No variable of dimension >= {min_dim} in dataset.")
     else:
         return variable_names[0]
 
