@@ -48,3 +48,11 @@ line_length = 88
 
 [tool.ruff]
 line-length = 88
+
+[tool.setuptools.packages.find]
+include = [ "hyve" ]
+where = [ "src/" ]
+
+[tool.setuptools_scm]
+version_file = "src/hyve/_version.py"
+local_scheme = "no-local-version"
