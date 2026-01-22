@@ -1,0 +1,13 @@
+name: test-cd
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: ecmwf/reusable-workflows/.github/workflows/cd-pypi.yml@v2
+    secrets: inherit
+    with:
+      testpypi: true
