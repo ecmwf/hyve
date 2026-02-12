@@ -83,3 +83,6 @@ where = [ "src/" ]
 [tool.setuptools_scm]
 version_file = "src/hyve/_version.py"
 local_scheme = "no-local-version"
+
+[tool.setuptools.dynamic]
+readme = {file = ["README.md"], content-type = "text/markdown"}
