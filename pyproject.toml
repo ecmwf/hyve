@@ -3,13 +3,33 @@ requires = ["setuptools>=65", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hyve"
+name = "hydro-verification"
 requires-python = ">=3.10"
 authors = [
     {name = "European Centre for Medium-Range Weather Forecasts (ECMWF)", email = "software.support@ecmwf.int"},
 ]
 license = { text = "Apache License Version 2.0" }
+description = "Tools for hydrological verification"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering"
+    ]
 dynamic = ["version"]
+
+[project.urls]
+    repository = "https://github.com/ecmwf/hyve"
+    documentation = "https://github.com/ecmwf/hyve"
+    issues = "https://github.com/ecmwf/hyve/issues"
 
 dependencies = [
     "numpy",
