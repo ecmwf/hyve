@@ -26,17 +26,17 @@ classifiers = [
     ]
 dynamic = ["version"]
 
-[project.urls]
-    repository = "https://github.com/ecmwf/hyve"
-    documentation = "https://github.com/ecmwf/hyve"
-    issues = "https://github.com/ecmwf/hyve/issues"
-
 dependencies = [
     "numpy",
     "pandas",
     "xarray",
     "earthkit-data>=0.18.2",
 ]
+
+[project.urls]
+    repository = "https://github.com/ecmwf/hyve"
+    documentation = "https://github.com/ecmwf/hyve"
+    issues = "https://github.com/ecmwf/hyve/issues"
 
 [project.optional-dependencies]
 test = [
