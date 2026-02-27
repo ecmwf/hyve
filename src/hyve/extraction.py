@@ -1,39 +1,65 @@
 import logging
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from dask.diagnostics import ProgressBar
 
+from hyve.config import ExtractorConfig, GridConfig, StationConfig
 from hyve.core import load_da
 
 logger = logging.getLogger(__name__)
 
 
-def process_grid_inputs(grid_config):
-    da, var_name = load_da(grid_config, 3)
+def process_grid_inputs(
+    grid: GridConfig,
+) -> tuple[xr.DataArray, str, str, str, tuple[int, int]]:
+    """Load gridded data and extract dimension metadata.
+
+    Parameters
+    ----------
+    grid : GridConfig
+        Grid configuration containing ``source`` and ``coords``.
+
+    Returns
+    -------
+    da : xr.DataArray
+        The loaded data array.
+    var_name : str
+        Name of the extracted variable.
+    x_dim : str
+        Name of the x (latitude) dimension.
+    y_dim : str
+        Name of the y (longitude) dimension.
+    shape : tuple[int, int]
+        Grid shape as ``(n_x, n_y)``.
+    """
+    source_dict = {
+        "source": grid.source,
+        "to_xarray_options": grid.to_xarray_options,
+    }
+    da, var_name = load_da(source_dict, 3)
     logger.info(f"Xarray created from source:\n{da}\n")
-    coord_config = grid_config.get("coords", {})
-    x_dim = coord_config.get("x", "lat")
-    y_dim = coord_config.get("y", "lon")
-    da = da.sortby([x_dim, y_dim])
+    x_dim = grid.coords.x
+    y_dim = grid.coords.y
     shape = da[x_dim].shape[0], da[y_dim].shape[0]
     return da, var_name, x_dim, y_dim, shape
 
 
-def construct_mask(x_indices, y_indices, shape):
-    mask = np.zeros(shape, dtype=bool)
-    mask[x_indices, y_indices] = True
+def _validate_index_bounds(df: pd.DataFrame, shape: tuple[int, int]) -> None:
+    """Raise if any station index is outside the grid dimensions.
 
-    flat_indices = np.ravel_multi_index((x_indices, y_indices), shape)
-    _, duplication_indexes = np.unique(flat_indices, return_inverse=True)
-    return mask, duplication_indexes
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Station DataFrame with ``x_index`` and ``y_index`` columns.
+    shape : tuple[int, int]
+        Grid shape ``(n_x, n_y)``.
 
-
-def create_mask_from_index(df, shape):
-    logger.info(f"Creating mask {shape} from index")
-    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
+    Raises
+    ------
+    ValueError
+        If any index is out of the grid bounds.
+    """
     x_indices = df["x_index"].values
     y_indices = df["y_index"].values
     if (
@@ -47,98 +73,87 @@ def create_mask_from_index(df, shape):
             f"x_index range=({int(x_indices.min())},{int(x_indices.max())}), "
             f"y_index range=({int(y_indices.min())},{int(y_indices.max())})"
         )
-    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
-    return mask, duplication_indexes
 
 
-def create_mask_from_coords(df, gridx, gridy, shape):
-    logger.info(f"Creating mask {shape} from coordinates")
-    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
-    station_x = df["x_coord"].values
-    station_y = df["y_coord"].values
+def parse_stations(station: StationConfig) -> pd.DataFrame:
+    """Read, filter, and normalize station DataFrame to canonical column names.
 
-    x_distances = np.abs(station_x[:, np.newaxis] - gridx)
-    x_indices = np.argmin(x_distances, axis=1)
-    y_distances = np.abs(station_y[:, np.newaxis] - gridy)
-    y_indices = np.argmin(y_distances, axis=1)
+    Parameters
+    ----------
+    station : StationConfig
+        Validated station configuration.
 
-    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
-    return mask, duplication_indexes
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with canonical columns (``station_name`` plus mapping cols).
 
-
-def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
-    """Read, filter, and normalize station DataFrame to canonical column names."""
-    logger.debug(f"Reading station file, {station_config}")
-    if "name" not in station_config:
-        raise ValueError(
-            "Station config must include a 'name' key mapping to the station column"
-        )
-    df = pd.read_csv(station_config["file"])
-    filters = station_config.get("filter")
-    if filters is not None:
-        logger.debug(f"Applying filters: {filters} to station DataFrame")
-        df = df.query(filters)
+    Raises
+    ------
+    ValueError
+        If stations are empty after filtering, contain duplicate names,
+        or have NaN in mapping columns.
+    """
+    logger.debug(f"Reading station file: {station.file}")
+    df = pd.read_csv(station.file)
+    if station.filter is not None:
+        logger.debug(f"Applying filter: {station.filter}")
+        df = df.query(station.filter)
 
     if len(df) == 0:
         raise ValueError("No stations found. Check station file or filter.")
 
-    has_index = "index" in station_config
-    has_coords = "coords" in station_config
-    has_index_1d = "index_1d" in station_config
+    renames = {station.name: "station_name"}
+    mapping_cols: list[str] = []
 
-    if not has_index_1d:
-        if has_index and has_coords:
-            raise ValueError(
-                "Station config must use either 'index' or 'coords', not both."
-            )
-        if not has_index and not has_coords:
-            raise ValueError(
-                "Station config must provide either 'index' or 'coords' for station mapping."
-            )
+    if station.index is not None:
+        renames[station.index.x] = "x_index"
+        renames[station.index.y] = "y_index"
+        mapping_cols.extend(["x_index", "y_index"])
 
-    renames = {}
-    renames[station_config["name"]] = "station_name"
+    if station.coords is not None:
+        renames[station.coords.x] = "x_coord"
+        renames[station.coords.y] = "y_coord"
+        mapping_cols.extend(["x_coord", "y_coord"])
 
-    if has_index:
-        index_config = station_config["index"]
-        x_col = index_config.get("x", "opt_x_index")
-        y_col = index_config.get("y", "opt_y_index")
-        renames[x_col] = "x_index"
-        renames[y_col] = "y_index"
-
-    if has_coords:
-        coords_config = station_config["coords"]
-        x_col = coords_config.get("x", "opt_x_coord")
-        y_col = coords_config.get("y", "opt_y_coord")
-        renames[x_col] = "x_coord"
-        renames[y_col] = "y_coord"
-
-    if has_index_1d:
-        renames[station_config["index_1d"]] = "index_1d"
+    if station.index_1d is not None:
+        renames[station.index_1d] = "index_1d"
+        mapping_cols.append("index_1d")
 
     df_renamed = df.rename(columns=renames)
 
-    if has_index and (
-        "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
-    ):
+    # Validate mapping columns exist (catches typos in config column names)
+    missing = [c for c in mapping_cols if c not in df_renamed.columns]
+    if missing:
         raise ValueError(
-            "Station file missing required index columns."
-            "Expected columns to map to 'x_index' and 'y_index'."
+            f"Station file is missing required columns after rename: {missing}. "
+            f"Check that the column names in your config match the CSV headers."
         )
-    if has_coords and (
-        "x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns
-    ):
+
+    # Validate no duplicate station names
+    dupes = df_renamed["station_name"].duplicated()
+    if dupes.any():
+        n_dupes = dupes.sum()
+        examples = df_renamed.loc[dupes, "station_name"].unique()[:5].tolist()
         raise ValueError(
-            "Station file missing required coordinate columns."
-            "Expected columns to map to 'x_coord' and 'y_coord'."
+            f"Duplicate station names found ({n_dupes} duplicates). "
+            f"Examples: {examples}"
         )
-    if has_index_1d and "index_1d" not in df_renamed.columns:
-        raise ValueError("Station file missing required 'index_1d' column.")
+
+    # Validate no NaN in mapping columns
+    for col in mapping_cols:
+        n_nan = df_renamed[col].isna().sum()
+        if n_nan > 0:
+            raise ValueError(
+                f"Column '{col}' contains {n_nan} NaN value(s). "
+                f"All station mapping values must be non-null."
+            )
 
     return df_renamed
 
 
-def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Dataset:
+def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
+    """Handle extraction via gribjump 1-D indices."""
     if "index_1d" not in df.columns:
         raise ValueError("Gribjump source requires 'index_1d' in station config.")
 
@@ -155,14 +170,11 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
     gribjump_config = {
         "source": {
             "gribjump": {
-                **grid_config["source"]["gribjump"],
+                **grid.source["gribjump"],
                 "ranges": ranges,
-                # fetch_coords_from_fdb is currently very slow. Needs fix in
-                # earthkit-data gribjump source.
-                # "fetch_coords_from_fdb": True,
             }
         },
-        "to_xarray_options": grid_config.get("to_xarray_options", {}),
+        "to_xarray_options": grid.to_xarray_options,
     }
 
     masked_da, var_name = load_da(gribjump_config, 2)
@@ -174,66 +186,101 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
     return ds
 
 
-def _process_regular(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Dataset:
+def _process_regular(
+    grid: GridConfig, df: pd.DataFrame, coord_tolerance: float | None
+) -> xr.Dataset:
+    """Handle extraction via 2-D index or coordinate mapping.
+
+    Uses xarray vectorized indexing (``sel``/``isel``) to extract station
+    timeseries directly, avoiding intermediate boolean masks.
+
+    Parameters
+    ----------
+    grid : GridConfig
+        Validated grid configuration.
+    df : pd.DataFrame
+        Station DataFrame with canonical column names.
+    coord_tolerance : float | None
+        Tolerance in degrees for coordinate matching. ``None`` disables the
+        tolerance guard.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with a ``station`` dimension.
+    """
     station_names = df["station_name"].values
-    da, var_name, x_dim, y_dim, shape = process_grid_inputs(grid_config)
+    da, var_name, x_dim, y_dim, shape = process_grid_inputs(grid)
 
     use_index = "x_index" in df.columns and "y_index" in df.columns
 
     if use_index:
-        mask, duplication_indexes = create_mask_from_index(df, shape)
+        _validate_index_bounds(df, shape)
+        xi = xr.DataArray(df["x_index"].values, dims="station")
+        yi = xr.DataArray(df["y_index"].values, dims="station")
+        logger.info("Extracting timeseries via index-based vectorized indexing")
+        result = da.isel({x_dim: xi, y_dim: yi})
     else:
-        mask, duplication_indexes = create_mask_from_coords(
-            df, da[x_dim].values, da[y_dim].values, shape
-        )
+        target_x = xr.DataArray(df["x_coord"].values, dims="station")
+        target_y = xr.DataArray(df["y_coord"].values, dims="station")
+        logger.info("Extracting timeseries via coordinate-based vectorized indexing")
+        sel_kwargs = {"method": "nearest"}
+        if coord_tolerance is not None:
+            sel_kwargs["tolerance"] = coord_tolerance
+        try:
+            result = da.sel({x_dim: target_x, y_dim: target_y}, **sel_kwargs)
+        except KeyError as exc:
+            raise ValueError(
+                "Station coordinates outside tolerance of grid. "
+                "Set station.coords.tolerance to null to disable."
+            ) from exc
 
-    logger.info("Extracting timeseries at selected stations")
-    masked_da = apply_mask(da, mask, x_dim, y_dim)
+    result = result.compute()
 
-    ds = xr.Dataset({var_name: masked_da})
-    ds = ds.isel(index=duplication_indexes)
-    ds = ds.rename({"index": "station"})
+    ds = xr.Dataset({var_name: result})
     ds["station"] = station_names
     return ds
 
 
-def process_inputs(
-    station_config: dict[str, Any], grid_config: dict[str, Any]
-) -> xr.Dataset:
-    df = parse_stations(station_config)
-    if "gribjump" in grid_config.get("source", {}):
-        return _process_gribjump(grid_config, df)
-    return _process_regular(grid_config, df)
+def process_inputs(station: StationConfig, grid: GridConfig) -> xr.Dataset:
+    """Parse stations and dispatch to the appropriate extraction backend.
+
+    Parameters
+    ----------
+    station : StationConfig
+        Validated station configuration.
+    grid : GridConfig
+        Validated grid configuration.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with a ``station`` dimension.
+    """
+    df = parse_stations(station)
+    if "gribjump" in grid.source:
+        return _process_gribjump(grid, df)
+    coord_tolerance = None
+    if station.coords is not None:
+        coord_tolerance = station.coords.tolerance
+    return _process_regular(grid, df, coord_tolerance)
 
 
-def mask_array_np(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    return arr[..., mask]
+def extractor(config: ExtractorConfig) -> xr.Dataset:
+    """Extract timeseries at station locations from gridded data.
 
+    Parameters
+    ----------
+    config : ExtractorConfig
+        Validated extraction configuration.
 
-def apply_mask(
-    da: xr.DataArray, mask: np.ndarray, coordx: str, coordy: str
-) -> xr.DataArray:
-    task = xr.apply_ufunc(
-        mask_array_np,
-        da,
-        mask,
-        input_core_dims=[(coordx, coordy), (coordx, coordy)],
-        output_core_dims=[["index"]],
-        output_dtypes=[da.dtype],
-        exclude_dims={coordx, coordy},
-        dask="parallelized",
-        dask_gufunc_kwargs={
-            "output_sizes": {"index": int(mask.sum())},
-            "allow_rechunk": True,
-        },
-    )
-    with ProgressBar(dt=15):
-        return task.compute()
-
-
-def extractor(config: dict[str, Any]) -> xr.Dataset:
-    ds = process_inputs(config["station"], config["grid"])
-    if config.get("output", None) is not None:
-        logger.info(f"Saving output to {config['output']['file']}")
-        ds.to_netcdf(config["output"]["file"])
+    Returns
+    -------
+    xr.Dataset
+        Dataset with a ``station`` dimension.
+    """
+    ds = process_inputs(config.station, config.grid)
+    if config.output is not None:
+        logger.info(f"Saving output to {config.output.file}")
+        ds.to_netcdf(str(config.output.file))
     return ds

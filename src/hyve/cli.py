@@ -4,10 +4,33 @@ import sys
 
 import yaml
 
+from hyve.config import ExtractorConfig
 from hyve.extraction import extractor
 from hyve.hydrostats.stat_calc import stat_calc
 
 logger = logging.getLogger(__name__)
+
+
+def extractor_cli(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        description="Extract timeseries at station locations from gridded data"
+    )
+    parser.add_argument("config", help="Path to the YAML config file")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable debug logging"
+    )
+    parsed = parser.parse_args(args)
+
+    logging.basicConfig(
+        level=logging.DEBUG if parsed.verbose else logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    with open(parsed.config, "r") as f:
+        config = yaml.safe_load(f)
+    extractor(ExtractorConfig(**config))
 
 
 def commandlineify(func):
@@ -25,7 +48,6 @@ def commandlineify(func):
     return wrapper
 
 
-extractor_cli = commandlineify(extractor)
 stat_calc_cli = commandlineify(stat_calc)
 
 
