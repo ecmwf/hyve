@@ -938,6 +938,33 @@ def test_coord_outside_grid_domain_raises(dummy_grid_data, tmp_path):
         _extract(config)
 
 
+def test_coord_tolerance_can_be_disabled(dummy_grid_data, tmp_path):
+    """Disabling tolerance allows far-away stations to map to nearest grid."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"station_id": ["S1"], "lat": [90.0], "lon": [12.0]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon", "tolerance": None},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    # lat=90, lon=12 -> nearest lat=43, lon=12 -> values [27, 47]
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S1").values, [27.0, 47.0]
+    )
+
+
 def test_wrong_column_name_in_config_raises(tmp_path):
     """Config referencing a non-existent CSV column raises ValueError."""
     csv_path = tmp_path / "stations.csv"
