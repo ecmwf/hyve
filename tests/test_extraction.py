@@ -7,12 +7,23 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from hyve.extraction import extractor
+from hyve.config import ExtractorConfig, StationConfig
+from hyve.extraction import extractor, parse_stations
+
+
+def _extract(config_dict: dict) -> xr.Dataset:
+    """Test helper: build ExtractorConfig from dict and run extractor."""
+    return extractor(ExtractorConfig(**config_dict))
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def dummy_grid_data():
-    """4x5 grid, 2 timesteps, temperature variable."""
+    """4x5 grid, 2 timesteps, ascending lats, temperature variable."""
     lats = np.array([40.0, 41.0, 42.0, 43.0])
     lons = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
 
@@ -63,6 +74,42 @@ def dummy_grid_data():
 
 
 @pytest.fixture
+def descending_lat_grid_data():
+    """4x3 grid, 2 timesteps, DESCENDING latitudes (north-to-south).
+
+    Layout (per timestep):
+        lat=43: [30, 31, 32]  (index 0)
+        lat=42: [20, 21, 22]  (index 1)
+        lat=41: [10, 11, 12]  (index 2)
+        lat=40: [ 0,  1,  2]  (index 3)
+    """
+    lats_desc = [43.0, 42.0, 41.0, 40.0]
+    lons = [10.0, 11.0, 12.0]
+
+    vals_t0 = np.array([30, 31, 32, 20, 21, 22, 10, 11, 12, 0, 1, 2], dtype=float)
+    vals_t1 = vals_t0 + 100
+
+    return [
+        {
+            "values": vals_t0,
+            "param": "temperature",
+            "date": 20240101,
+            "time": 0,
+            "distinctLatitudes": lats_desc,
+            "distinctLongitudes": lons,
+        },
+        {
+            "values": vals_t1,
+            "param": "temperature",
+            "date": 20240102,
+            "time": 0,
+            "distinctLatitudes": lats_desc,
+            "distinctLongitudes": lons,
+        },
+    ]
+
+
+@pytest.fixture
 def station_dataframe():
     """2 stations with both index and coordinate columns."""
     return pd.DataFrame(
@@ -70,8 +117,8 @@ def station_dataframe():
             "station_id": ["STATION_A", "STATION_B"],
             "opt_x_index": [1, 2],
             "opt_y_index": [2, 3],
-            "opt_x_coord": [41.1, 41.9],  # offset to test nearest-neighbor
-            "opt_y_coord": [12.2, 13.1],
+            "opt_x_coord": [41.00005, 42.00005],  # within tolerance
+            "opt_y_coord": [12.00005, 13.00005],
         }
     )
 
@@ -113,7 +160,7 @@ def test_extractor_with_temperature(dummy_grid_data, station_csv_file, mapping_c
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert isinstance(result_ds, xr.Dataset)
     assert "temperature" in result_ds.data_vars
@@ -167,7 +214,7 @@ def test_extractor_with_station_filter(dummy_grid_data, tmp_path):
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert len(result_ds.station) == 2
     assert list(result_ds.station.values) == ["S1", "S3"]
@@ -176,7 +223,9 @@ def test_extractor_with_station_filter(dummy_grid_data, tmp_path):
 
 
 def test_extractor_rejects_both_index_and_coords(dummy_grid_data, station_csv_file):
-    """Test that providing both index and coords raises ValueError."""
+    """Providing both index and coords raises ValidationError."""
+    from pydantic import ValidationError
+
     config = {
         "station": {
             "file": station_csv_file,
@@ -191,9 +240,9 @@ def test_extractor_rejects_both_index_and_coords(dummy_grid_data, station_csv_fi
     }
 
     with pytest.raises(
-        ValueError, match="must use either 'index' or 'coords', not both"
+        ValidationError, match="must use either 'index' or 'coords', not both"
     ):
-        extractor(config)
+        ExtractorConfig(**config)
 
 
 def test_extractor_with_output_file(dummy_grid_data, station_csv_file, tmp_path):
@@ -222,7 +271,7 @@ def test_extractor_with_output_file(dummy_grid_data, station_csv_file, tmp_path)
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert output_file.exists()
 
@@ -257,14 +306,12 @@ def test_extractor_with_empty_stations(dummy_grid_data, tmp_path):
     }
 
     with pytest.raises(ValueError, match="No stations found"):
-        extractor(config)
+        _extract(config)
 
 
 @patch("earthkit.data.from_source")
 def test_extractor_gribjump(mock_from_source, tmp_path):
-    """Test gribjump path: verifies ranges computation and earthkit call."""
-
-    # Mock returns object with to_xarray() that returns minimal dataset
+    """Gribjump path: ranges, earthkit call, deduplication, and data values."""
     mock_source = Mock()
     mock_source.to_xarray.return_value = xr.Dataset(
         {
@@ -275,7 +322,6 @@ def test_extractor_gribjump(mock_from_source, tmp_path):
     )
     mock_from_source.return_value = mock_source
 
-    # Station CSV with index_1d (includes duplicate to test deduplication)
     csv_file = tmp_path / "stations.csv"
     pd.DataFrame(
         {
@@ -295,15 +341,530 @@ def test_extractor_gribjump(mock_from_source, tmp_path):
         },
     }
 
-    result = extractor(config)
+    result = _extract(config)
 
-    # Verify earthkit.data.from_source was called correctly
     mock_from_source.assert_called_once_with(
         "gribjump",
         request={"class": "od", "expver": "0001", "stream": "oper"},
         ranges=[(100, 101), (200, 201)],
     )
 
-    # Verify output
     assert len(result.station) == 3
     assert list(result.station.values) == ["S1", "S2", "S3"]
+
+    # S1 and S3 share index 100 → unique pos 0 → row [15, 25]
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S1").values, [15.0, 25.0]
+    )
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S3").values, [15.0, 25.0]
+    )
+    # S2: index 200 → unique pos 1 → row [35, 45]
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S2").values, [35.0, 45.0]
+    )
+
+
+# ---------------------------------------------------------------------------
+# test-sort-bug: Regression test for Issue #5
+# ---------------------------------------------------------------------------
+
+
+def test_index_extraction_with_descending_latitudes(descending_lat_grid_data, tmp_path):
+    """Index-based extraction must work when grid latitudes are descending.
+
+    The station indices [0, 0] and [2, 1] were computed against the original
+    descending grid:
+        index 0 → lat=43, index 2 → lat=41
+    The extractor must not sort the grid before applying these indices.
+    """
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["HIGH_LAT", "MID_LAT"],
+            "opt_x_index": [0, 2],
+            "opt_y_index": [0, 1],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": descending_lat_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    # HIGH_LAT: index [0, 0] on descending grid → lat=43, lon=10 → values 30, 130
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="HIGH_LAT").values, [30.0, 130.0]
+    )
+    # MID_LAT: index [2, 1] on descending grid → lat=41, lon=11 → values 11, 111
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="MID_LAT").values, [11.0, 111.0]
+    )
+
+
+def test_coord_extraction_with_descending_latitudes(descending_lat_grid_data, tmp_path):
+    """Coord-based extraction must work regardless of grid lat ordering."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["HIGH_LAT", "MID_LAT"],
+            "lat": [43.0, 41.0],
+            "lon": [10.0, 11.0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": descending_lat_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    # lat=43, lon=10 → values 30, 130
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="HIGH_LAT").values, [30.0, 130.0]
+    )
+    # lat=41, lon=11 → values 11, 111
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="MID_LAT").values, [11.0, 111.0]
+    )
+
+
+# ---------------------------------------------------------------------------
+# test-happy-path-gaps: Fill gaps in existing happy-path tests
+# ---------------------------------------------------------------------------
+
+
+def test_shared_grid_cell_regular_path(dummy_grid_data, tmp_path):
+    """Two stations mapping to the same grid cell get identical values."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["S1", "S2"],
+            "opt_x_index": [1, 1],
+            "opt_y_index": [2, 2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    assert len(result.station) == 2
+    # Both stations at [1, 2] → lat=41, lon=12 → values 17, 37
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S1").values, [17.0, 37.0]
+    )
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S2").values, [17.0, 37.0]
+    )
+
+
+def test_default_station_column_names(dummy_grid_data, tmp_path):
+    """Index config with no explicit x/y uses default column names."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["S1"],
+            "opt_x_index": [0],
+            "opt_y_index": [0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {},  # uses defaults: opt_x_index, opt_y_index
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    # [0, 0] → lat=40, lon=10 → values 10, 30
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S1").values, [10.0, 30.0]
+    )
+
+
+def test_no_mapping_raises_error(dummy_grid_data, tmp_path):
+    """Station config with neither index nor coords nor index_1d raises."""
+    from pydantic import ValidationError
+
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"station_id": ["S1"], "x": [0], "y": [0]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {"file": str(csv_path), "name": "station_id"},
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with pytest.raises(
+        ValidationError, match="must provide either 'index' or 'coords'"
+    ):
+        ExtractorConfig(**config)
+
+
+# ---------------------------------------------------------------------------
+# test-edge-cases
+# ---------------------------------------------------------------------------
+
+
+def test_single_station_extraction(dummy_grid_data, tmp_path):
+    """Extraction works with a single station."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {"station_id": ["ONLY"], "opt_x_index": [3], "opt_y_index": [4]}
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)
+
+    assert len(result.station) == 1
+    # [3, 4] → lat=43, lon=14 → values 29, 49
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="ONLY").values, [29.0, 49.0]
+    )
+
+
+def test_non_uniform_grid_spacing(tmp_path):
+    """Coord-based extraction works on a grid with non-uniform spacing."""
+    lats = np.array([40.0, 41.0, 43.0, 47.0])  # gaps: 1, 2, 4
+    lons = np.array([10.0, 10.5, 12.0])  # gaps: 0.5, 1.5
+
+    da = xr.DataArray(
+        np.arange(24, dtype=float).reshape(2, 4, 3),
+        dims=["time", "latitude", "longitude"],
+        coords={
+            "time": pd.date_range("2024-01-01", periods=2),
+            "latitude": lats,
+            "longitude": lons,
+        },
+    )
+
+    csv_path = tmp_path / "stations.csv"
+    # Station near (43.0, 10.5) → nearest lat=43 (idx 2), nearest lon=10.5 (idx 1)
+    pd.DataFrame({"station_id": ["S1"], "lat": [43.00005], "lon": [10.50005]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": []}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with patch("hyve.extraction.load_da", return_value=(da, "tp")):
+        result = _extract(config)
+
+    # lat=43 (idx 2), lon=10.5 (idx 1) → t=0: 2*3+1=7, t=1: 1*12+2*3+1=19
+    np.testing.assert_allclose(result["tp"].sel(station="S1").values, [7.0, 19.0])
+
+
+# ---------------------------------------------------------------------------
+# test-dask-lazy: Verify dask-chunked input works
+# ---------------------------------------------------------------------------
+
+
+def test_dask_chunked_coord_extraction(dummy_grid_data, tmp_path):
+    """Coord-based extraction produces correct results with dask-backed input."""
+    lats = np.array([40.0, 41.0, 42.0, 43.0])
+    lons = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
+    t0 = np.array(
+        [
+            [10, 11, 12, 13, 14],
+            [15, 16, 17, 18, 19],
+            [20, 21, 22, 23, 24],
+            [25, 26, 27, 28, 29],
+        ],
+        dtype=float,
+    )
+    t1 = t0 + 20
+    import dask.array as dask_array
+
+    # Use full-size chunks to avoid expensive rechunking on tiny arrays
+    da_chunked = xr.DataArray(
+        dask_array.from_array(np.stack([t0, t1]), chunks=-1),
+        dims=["time", "latitude", "longitude"],
+        coords={
+            "time": pd.date_range("2024-01-01", periods=2),
+            "latitude": lats,
+            "longitude": lons,
+        },
+    )
+    assert da_chunked.chunks is not None
+
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["S1", "S2"],
+            "lat": [41.00005, 42.99995],
+            "lon": [12.00005, 13.00005],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": []}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with patch("hyve.extraction.load_da", return_value=(da_chunked, "temperature")):
+        result = _extract(config)
+
+    # S1: nearest (41, 12) → [17, 37], S2: nearest (43, 13) → [28, 48]
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S1").values, [17.0, 37.0]
+    )
+    np.testing.assert_allclose(
+        result["temperature"].sel(station="S2").values, [28.0, 48.0]
+    )
+
+
+# ---------------------------------------------------------------------------
+# test-validation-errors
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_station_names_raises(dummy_grid_data, tmp_path):
+    """Duplicate station names must raise ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["DUP", "DUP", "UNIQUE"],
+            "opt_x_index": [0, 1, 2],
+            "opt_y_index": [0, 1, 2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    station_config = StationConfig(
+        file=str(csv_path),
+        name="station_id",
+        index={"x": "opt_x_index", "y": "opt_y_index"},
+    )
+
+    with pytest.raises(ValueError, match="[Dd]uplicate"):
+        parse_stations(station_config)
+
+
+def test_nan_in_station_indices_raises(dummy_grid_data, tmp_path):
+    """NaN in station index columns must raise ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["S1", "S2"],
+            "opt_x_index": [0, np.nan],
+            "opt_y_index": [1, 2],
+        }
+    ).to_csv(csv_path, index=False)
+
+    station_config = StationConfig(
+        file=str(csv_path),
+        name="station_id",
+        index={"x": "opt_x_index", "y": "opt_y_index"},
+    )
+
+    with pytest.raises(ValueError, match="NaN|nan|missing"):
+        parse_stations(station_config)
+
+
+def test_nan_in_station_coords_raises(dummy_grid_data, tmp_path):
+    """NaN in station coordinate columns must raise ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["S1", "S2"],
+            "lat": [41.0, np.nan],
+            "lon": [12.0, 13.0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    station_config = StationConfig(
+        file=str(csv_path),
+        name="station_id",
+        coords={"x": "lat", "y": "lon"},
+    )
+
+    with pytest.raises(ValueError, match="NaN|nan|missing"):
+        parse_stations(station_config)
+
+
+def test_missing_station_config_key_raises(dummy_grid_data, tmp_path):
+    """Missing 'station' key in config raises ValidationError."""
+    from pydantic import ValidationError
+
+    config = {
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+        },
+    }
+
+    with pytest.raises(ValidationError, match="station"):
+        ExtractorConfig(**config)
+
+
+def test_missing_grid_source_raises(tmp_path):
+    """Missing 'source' in grid config raises ValidationError."""
+    from pydantic import ValidationError
+
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"station_id": ["S1"], "opt_x_index": [0], "opt_y_index": [0]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {},
+    }
+
+    with pytest.raises(ValidationError, match="source"):
+        ExtractorConfig(**config)
+
+
+def test_missing_station_name_key_raises(dummy_grid_data, tmp_path):
+    """Missing 'name' in station config raises ValidationError."""
+    from pydantic import ValidationError
+
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"sid": ["S1"], "opt_x_index": [0], "opt_y_index": [0]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with pytest.raises(ValidationError, match="name"):
+        ExtractorConfig(**config)
+
+
+def test_index_out_of_bounds_raises(dummy_grid_data, tmp_path):
+    """Index exceeding grid dimensions raises ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {"station_id": ["S1"], "opt_x_index": [99], "opt_y_index": [0]}
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "index": {"x": "opt_x_index", "y": "opt_y_index"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="out of grid bounds"):
+        _extract(config)
+
+
+def test_coord_outside_grid_domain_raises(dummy_grid_data, tmp_path):
+    """Station coordinates outside grid bounding box raises ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"station_id": ["S1"], "lat": [90.0], "lon": [12.0]}).to_csv(
+        csv_path, index=False
+    )
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon"},
+        },
+        "grid": {
+            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="outside tolerance"):
+        _extract(config)
+
+
+def test_wrong_column_name_in_config_raises(tmp_path):
+    """Config referencing a non-existent CSV column raises ValueError."""
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame({"station_id": ["S1"], "lat": [41.0], "lon": [12.0]}).to_csv(
+        csv_path, index=False
+    )
+
+    station_config = StationConfig(
+        file=str(csv_path),
+        name="station_id",
+        coords={"x": "WRONG_NAME", "y": "lon"},
+    )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        parse_stations(station_config)
