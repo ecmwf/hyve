@@ -18,8 +18,19 @@ class IndexMapping(StrictBaseModel):
 
 
 class CoordMapping(StrictBaseModel):
+    """Column names for coordinate-based station mapping.
+
+    Notes
+    -----
+    ``tolerance`` is the maximum distance between a station coordinate and the
+    nearest grid coordinate, in the units of the grid's coordinates (e.g.
+    degrees for lat/lon grids, metres for projected grids). If ``None``
+    (default), the nearest grid point is always used, however far away it is.
+    """
+
     x: str = "opt_x_coord"
     y: str = "opt_y_coord"
+    tolerance: Optional[float] = None
 
 
 class GridCoords(StrictBaseModel):

@@ -29,7 +29,7 @@ def process_grid_inputs(
     Returns
     -------
     da : xr.DataArray
-        The loaded and coordinate-sorted DataArray.
+        The loaded DataArray, in the coordinate order of the source.
     var_name : str
         Name of the main variable in the dataset.
     x_dim : str
@@ -38,6 +38,8 @@ def process_grid_inputs(
         Name of the y spatial dimension.
     shape : tuple[int, int]
         Grid shape (n_x, n_y).
+    ds_attrs : dict[str, Any]
+        Global attributes of the loaded dataset.
     """
     da, var_name, ds_attrs = load_da(
         {
@@ -50,23 +52,25 @@ def process_grid_inputs(
     logger.info(f"Xarray created from source:\n{da}\n")
     x_dim = grid.coords.x
     y_dim = grid.coords.y
-    da = da.sortby([x_dim, y_dim])
     shape = da[x_dim].shape[0], da[y_dim].shape[0]
     return da, var_name, x_dim, y_dim, shape, ds_attrs
 
 
-def construct_mask(x_indices, y_indices, shape):
-    mask = np.zeros(shape, dtype=bool)
-    mask[x_indices, y_indices] = True
+def _validate_index_bounds(df: pd.DataFrame, shape: tuple[int, int]) -> None:
+    """Raise if any station index is outside the grid dimensions.
 
-    flat_indices = np.ravel_multi_index((x_indices, y_indices), shape)
-    _, duplication_indexes = np.unique(flat_indices, return_inverse=True)
-    return mask, duplication_indexes
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Station DataFrame with ``x_index`` and ``y_index`` columns.
+    shape : tuple[int, int]
+        Grid shape ``(n_x, n_y)``.
 
-
-def create_mask_from_index(df, shape):
-    logger.info(f"Creating mask {shape} from index")
-    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
+    Raises
+    ------
+    ValueError
+        If any index is out of the grid bounds.
+    """
     x_indices = df["x_index"].values
     y_indices = df["y_index"].values
     if (
@@ -80,23 +84,6 @@ def create_mask_from_index(df, shape):
             f"x_index range=({int(x_indices.min())},{int(x_indices.max())}), "
             f"y_index range=({int(y_indices.min())},{int(y_indices.max())})"
         )
-    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
-    return mask, duplication_indexes
-
-
-def create_mask_from_coords(df, gridx, gridy, shape):
-    logger.info(f"Creating mask {shape} from coordinates")
-    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
-    station_x = df["x_coord"].values
-    station_y = df["y_coord"].values
-
-    x_distances = np.abs(station_x[:, np.newaxis] - gridx)
-    x_indices = np.argmin(x_distances, axis=1)
-    y_distances = np.abs(station_y[:, np.newaxis] - gridy)
-    y_indices = np.argmin(y_distances, axis=1)
-
-    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
-    return mask, duplication_indexes
 
 
 def parse_stations(station: StationConfig) -> pd.DataFrame:
@@ -118,8 +105,9 @@ def parse_stations(station: StationConfig) -> pd.DataFrame:
     Raises
     ------
     ValueError
-        If the station file is empty after filtering, or if the configured
-        mapping columns are not present in the CSV.
+        If the station file is empty after filtering, if the configured
+        name or mapping columns are not present in the CSV, if station names
+        are duplicated, or if mapping columns contain NaN.
     """
     logger.debug(f"Reading station file, {station}")
     df = pd.read_csv(station.file)
@@ -131,47 +119,60 @@ def parse_stations(station: StationConfig) -> pd.DataFrame:
         raise ValueError("No stations found. Check station file or filter.")
 
     renames = {station.name: "station_name"}
+    mapping_cols: list[str] = []
 
     if station.index is not None:
         renames[station.index.x] = "x_index"
         renames[station.index.y] = "y_index"
+        mapping_cols.extend(["x_index", "y_index"])
 
     if station.coords is not None:
         renames[station.coords.x] = "x_coord"
         renames[station.coords.y] = "y_coord"
+        mapping_cols.extend(["x_coord", "y_coord"])
 
     if station.index_1d is not None:
         renames[station.index_1d] = "index_1d"
+        mapping_cols.append("index_1d")
 
     df_renamed = df.rename(columns=renames)
 
     if "station_name" not in df_renamed.columns:
         raise ValueError(
-            f"Station file missing required name column '{station.name}'."
+            f"Station file missing required name column '{station.name}'. "
             "Expected column to map to 'station_name'."
         )
 
-    if station.index is not None and (
-        "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
-    ):
+    # Validate mapping columns exist (catches typos in config column names)
+    missing = [c for c in mapping_cols if c not in df_renamed.columns]
+    if missing:
         raise ValueError(
-            "Station file missing required index columns."
-            "Expected columns to map to 'x_index' and 'y_index'."
+            f"Station file is missing required columns after rename: {missing}. "
+            "Check that the column names in your config match the CSV headers."
         )
-    if station.coords is not None and (
-        "x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns
-    ):
+
+    dupes = df_renamed["station_name"].duplicated()
+    if dupes.any():
+        n_dupes = dupes.sum()
+        examples = df_renamed.loc[dupes, "station_name"].unique()[:5].tolist()
         raise ValueError(
-            "Station file missing required coordinate columns."
-            "Expected columns to map to 'x_coord' and 'y_coord'."
+            f"Duplicate station names found ({n_dupes} duplicates). "
+            f"Examples: {examples}"
         )
-    if station.index_1d is not None and "index_1d" not in df_renamed.columns:
-        raise ValueError("Station file missing required 'index_1d' column.")
+
+    for col in mapping_cols:
+        n_nan = df_renamed[col].isna().sum()
+        if n_nan > 0:
+            raise ValueError(
+                f"Column '{col}' contains {n_nan} NaN value(s). "
+                "All station mapping values must be non-null."
+            )
 
     return df_renamed
 
 
 def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
+    """Handle extraction via gribjump 1-D indices."""
     if "index_1d" not in df.columns:
         raise ValueError("Gribjump source requires 'index_1d' in station config.")
 
@@ -207,25 +208,60 @@ def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
     return ds
 
 
-def _process_regular(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
+def _process_regular(
+    grid: GridConfig, df: pd.DataFrame, coord_tolerance: float | None
+) -> xr.Dataset:
+    """Handle extraction via 2-D index or coordinate mapping.
+
+    Uses xarray vectorized indexing (``isel``/``sel``) to extract station
+    timeseries directly, avoiding intermediate boolean masks.
+
+    Parameters
+    ----------
+    grid : GridConfig
+        Validated grid configuration.
+    df : pd.DataFrame
+        Station DataFrame with canonical column names.
+    coord_tolerance : float | None
+        Maximum distance between a station coordinate and the nearest grid
+        coordinate, in the units of the grid's coordinates. ``None`` always
+        uses the nearest grid point.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with a ``station`` dimension.
+    """
     station_names = df["station_name"].values
     da, var_name, x_dim, y_dim, shape, ds_attrs = process_grid_inputs(grid)
 
     use_index = "x_index" in df.columns and "y_index" in df.columns
 
     if use_index:
-        mask, duplication_indexes = create_mask_from_index(df, shape)
+        _validate_index_bounds(df, shape)
+        xi = xr.DataArray(df["x_index"].values, dims="station")
+        yi = xr.DataArray(df["y_index"].values, dims="station")
+        logger.info("Extracting timeseries via index-based vectorized indexing")
+        result = da.isel({x_dim: xi, y_dim: yi})
     else:
-        mask, duplication_indexes = create_mask_from_coords(
-            df, da[x_dim].values, da[y_dim].values, shape
-        )
+        target_x = xr.DataArray(df["x_coord"].values, dims="station")
+        target_y = xr.DataArray(df["y_coord"].values, dims="station")
+        logger.info("Extracting timeseries via coordinate-based vectorized indexing")
+        sel_kwargs: dict[str, Any] = {"method": "nearest"}
+        if coord_tolerance is not None:
+            sel_kwargs["tolerance"] = coord_tolerance
+        try:
+            result = da.sel({x_dim: target_x, y_dim: target_y}, **sel_kwargs)
+        except KeyError as exc:
+            raise ValueError(
+                "Station coordinates outside tolerance of grid. "
+                "Increase station.coords.tolerance or set it to null to disable."
+            ) from exc
 
-    logger.info("Extracting timeseries at selected stations")
-    masked_da = apply_mask(da, mask, x_dim, y_dim)
+    with ProgressBar(dt=15):
+        result = result.compute()
 
-    ds = xr.Dataset({var_name: masked_da}, attrs=ds_attrs)
-    ds = ds.isel(index=duplication_indexes)
-    ds = ds.rename({"index": "station"})
+    ds = xr.Dataset({var_name: result}, attrs=ds_attrs)
     ds["station"] = station_names
     return ds
 
@@ -238,8 +274,8 @@ def process_inputs(station: StationConfig, grid: GridConfig) -> xr.Dataset:
     station : StationConfig
         Station configuration.
     grid : GridConfig
-        Grid configuration. If ``source`` contains a ``gribjump`` key, the
-        gribjump extraction path is used; otherwise the regular path is used.
+        Grid configuration. If ``source.name`` is ``gribjump``, the gribjump
+        extraction path is used; otherwise the regular path is used.
 
     Returns
     -------
@@ -249,32 +285,8 @@ def process_inputs(station: StationConfig, grid: GridConfig) -> xr.Dataset:
     df = parse_stations(station)
     if grid.source.name == "gribjump":
         return _process_gribjump(grid, df)
-    return _process_regular(grid, df)
-
-
-def mask_array_np(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    return arr[..., mask]
-
-
-def apply_mask(
-    da: xr.DataArray, mask: np.ndarray, coordx: str, coordy: str
-) -> xr.DataArray:
-    task = xr.apply_ufunc(
-        mask_array_np,
-        da,
-        mask,
-        input_core_dims=[(coordx, coordy), (coordx, coordy)],
-        output_core_dims=[["index"]],
-        output_dtypes=[da.dtype],
-        exclude_dims={coordx, coordy},
-        dask="parallelized",
-        dask_gufunc_kwargs={
-            "output_sizes": {"index": int(mask.sum())},
-            "allow_rechunk": True,
-        },
-    )
-    with ProgressBar(dt=15):
-        return task.compute()
+    coord_tolerance = station.coords.tolerance if station.coords is not None else None
+    return _process_regular(grid, df, coord_tolerance)
 
 
 def extractor(config: ExtractorConfig) -> xr.Dataset:
