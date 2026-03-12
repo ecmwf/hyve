@@ -6,8 +6,14 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from pydantic import ValidationError
 
+from hyve.config import ExtractorConfig
 from hyve.extraction import extractor
+
+
+def _extract(config_dict: dict):
+    return extractor(ExtractorConfig(**config_dict))
 
 
 @pytest.fixture
@@ -113,7 +119,7 @@ def test_extractor_with_temperature(dummy_grid_data, station_csv_file, mapping_c
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert isinstance(result_ds, xr.Dataset)
     assert "temperature" in result_ds.data_vars
@@ -167,7 +173,7 @@ def test_extractor_with_station_filter(dummy_grid_data, tmp_path):
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert len(result_ds.station) == 2
     assert list(result_ds.station.values) == ["S1", "S3"]
@@ -190,10 +196,50 @@ def test_extractor_rejects_both_index_and_coords(dummy_grid_data, station_csv_fi
         },
     }
 
-    with pytest.raises(
-        ValueError, match="must use either 'index' or 'coords', not both"
-    ):
-        extractor(config)
+    with pytest.raises(ValidationError):
+        _extract(config)
+
+
+def test_extractor_rejects_no_station_mapping(dummy_grid_data, station_csv_file):
+    """Test that omitting index, coords, and index_1d raises ValidationError."""
+    config = {
+        "station": {"file": station_csv_file, "name": "station_id"},
+        "grid": {"source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}}},
+    }
+
+    with pytest.raises(ValidationError):
+        _extract(config)
+
+
+def test_extractor_rejects_index_1d_with_other_mapping(station_csv_file):
+    """Test that combining index_1d with another mapping raises ValidationError."""
+    config = {
+        "station": {
+            "file": station_csv_file,
+            "name": "station_id",
+            "index": {},
+            "index_1d": "some_col",
+        },
+        "grid": {"source": {"list-of-dicts": {}}},
+    }
+
+    with pytest.raises(ValidationError):
+        _extract(config)
+
+
+def test_extractor_rejects_multi_key_source(station_csv_file):
+    """Test that a source dict with more than one key raises ValidationError."""
+    config = {
+        "station": {
+            "file": station_csv_file,
+            "name": "station_id",
+            "index": {},
+        },
+        "grid": {"source": {"list-of-dicts": {}, "fdb": {}}},
+    }
+
+    with pytest.raises(ValidationError):
+        _extract(config)
 
 
 def test_extractor_with_output_file(dummy_grid_data, station_csv_file, tmp_path):
@@ -222,7 +268,7 @@ def test_extractor_with_output_file(dummy_grid_data, station_csv_file, tmp_path)
         },
     }
 
-    result_ds = extractor(config)
+    result_ds = _extract(config)
 
     assert output_file.exists()
 
@@ -257,7 +303,24 @@ def test_extractor_with_empty_stations(dummy_grid_data, tmp_path):
     }
 
     with pytest.raises(ValueError, match="No stations found"):
-        extractor(config)
+        _extract(config)
+
+
+def test_extractor_rejects_unknown_field_in_nested_config(
+    dummy_grid_data, station_csv_file
+):
+    """Typo fields in nested configs now raise ValidationError instead of being silently ignored."""
+    config = {
+        "station": {
+            "file": station_csv_file,
+            "name": "station_id",
+            "index": {},
+            "typo_field": "oops",
+        },
+        "grid": {"source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}}},
+    }
+    with pytest.raises(ValidationError):
+        _extract(config)
 
 
 @patch("earthkit.data.from_source")
@@ -295,7 +358,7 @@ def test_extractor_gribjump(mock_from_source, tmp_path):
         },
     }
 
-    result = extractor(config)
+    result = _extract(config)
 
     # Verify earthkit.data.from_source was called correctly
     mock_from_source.assert_called_once_with(

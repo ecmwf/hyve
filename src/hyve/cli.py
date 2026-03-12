@@ -3,7 +3,9 @@ import logging
 import sys
 
 import yaml
+from pydantic import ValidationError
 
+from hyve.config import ExtractorConfig
 from hyve.extraction import extractor
 from hyve.hydrostats.stat_calc import stat_calc
 
@@ -25,7 +27,30 @@ def commandlineify(func):
     return wrapper
 
 
-extractor_cli = commandlineify(extractor)
+def extractor_cli(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    parser = argparse.ArgumentParser(description="Run hyve extractor with YAML config")
+    parser.add_argument("config", help="Path to the YAML config file")
+    parsed = parser.parse_args(args)
+
+    try:
+        with open(parsed.config, "r") as f:
+            raw = yaml.safe_load(f)
+    except FileNotFoundError:
+        sys.stderr.write(f"Error: config file not found: {parsed.config}\n")
+        sys.exit(1)
+
+    try:
+        extractor(ExtractorConfig(**(raw or {})))
+    except ValidationError as e:
+        sys.stderr.write("Error: invalid configuration\n")
+        for err in e.errors():
+            path = " -> ".join(str(x) for x in err["loc"])
+            sys.stderr.write(f"  {path}: {err['msg']}\n")
+        sys.exit(1)
+
+
 stat_calc_cli = commandlineify(stat_calc)
 
 
