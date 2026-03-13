@@ -29,6 +29,7 @@ dynamic = ["version", "readme"]
 dependencies = [
     "numpy",
     "pandas",
+    "pydantic>=2",
     "xarray",
     "earthkit-data>=0.18.2",
 ]

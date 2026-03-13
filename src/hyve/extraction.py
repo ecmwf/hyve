@@ -1,22 +1,45 @@
 import logging
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from dask.diagnostics import ProgressBar
 
+from hyve.config import ExtractorConfig, GridConfig, StationConfig
 from hyve.core import load_da
 
 logger = logging.getLogger(__name__)
 
 
-def process_grid_inputs(grid_config):
-    da, var_name = load_da(grid_config, 3)
+def process_grid_inputs(
+    grid: GridConfig,
+) -> tuple[xr.DataArray, str, str, str, tuple[int, int]]:
+    """Load a DataArray from the grid source and return spatial metadata.
+
+    Parameters
+    ----------
+    grid : GridConfig
+        Grid configuration specifying the earthkit-data source and coordinate names.
+
+    Returns
+    -------
+    da : xr.DataArray
+        The loaded and coordinate-sorted DataArray.
+    var_name : str
+        Name of the main variable in the dataset.
+    x_dim : str
+        Name of the x spatial dimension.
+    y_dim : str
+        Name of the y spatial dimension.
+    shape : tuple[int, int]
+        Grid shape (n_x, n_y).
+    """
+    da, var_name = load_da(
+        {"source": grid.source, "to_xarray_options": grid.to_xarray_options}, 3
+    )
     logger.info(f"Xarray created from source:\n{da}\n")
-    coord_config = grid_config.get("coords", {})
-    x_dim = coord_config.get("x", "lat")
-    y_dim = coord_config.get("y", "lon")
+    x_dim = grid.coords.x
+    y_dim = grid.coords.y
     da = da.sortby([x_dim, y_dim])
     shape = da[x_dim].shape[0], da[y_dim].shape[0]
     return da, var_name, x_dim, y_dim, shape
@@ -66,79 +89,73 @@ def create_mask_from_coords(df, gridx, gridy, shape):
     return mask, duplication_indexes
 
 
-def parse_stations(station_config: dict[str, Any]) -> pd.DataFrame:
-    """Read, filter, and normalize station DataFrame to canonical column names."""
-    logger.debug(f"Reading station file, {station_config}")
-    if "name" not in station_config:
-        raise ValueError(
-            "Station config must include a 'name' key mapping to the station column"
-        )
-    df = pd.read_csv(station_config["file"])
-    filters = station_config.get("filter")
-    if filters is not None:
-        logger.debug(f"Applying filters: {filters} to station DataFrame")
-        df = df.query(filters)
+def parse_stations(station: StationConfig) -> pd.DataFrame:
+    """Read, filter, and normalize station CSV to canonical column names.
+
+    Parameters
+    ----------
+    station : StationConfig
+        Station configuration specifying the CSV path, station name column,
+        location mapping (index, coords, or index_1d), and optional filter.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns renamed to canonical names: ``station_name``
+        plus ``x_index``/``y_index``, ``x_coord``/``y_coord``, or ``index_1d``
+        depending on the configured mapping mode.
+
+    Raises
+    ------
+    ValueError
+        If the station file is empty after filtering, or if the configured
+        mapping columns are not present in the CSV.
+    """
+    logger.debug(f"Reading station file, {station}")
+    df = pd.read_csv(station.file)
+    if station.filter is not None:
+        logger.debug(f"Applying filters: {station.filter} to station DataFrame")
+        df = df.query(station.filter)
 
     if len(df) == 0:
         raise ValueError("No stations found. Check station file or filter.")
 
-    has_index = "index" in station_config
-    has_coords = "coords" in station_config
-    has_index_1d = "index_1d" in station_config
+    renames = {station.name: "station_name"}
 
-    if not has_index_1d:
-        if has_index and has_coords:
-            raise ValueError(
-                "Station config must use either 'index' or 'coords', not both."
-            )
-        if not has_index and not has_coords:
-            raise ValueError(
-                "Station config must provide either 'index' or 'coords' for station mapping."
-            )
+    if station.index is not None:
+        renames[station.index.x] = "x_index"
+        renames[station.index.y] = "y_index"
 
-    renames = {}
-    renames[station_config["name"]] = "station_name"
+    if station.coords is not None:
+        renames[station.coords.x] = "x_coord"
+        renames[station.coords.y] = "y_coord"
 
-    if has_index:
-        index_config = station_config["index"]
-        x_col = index_config.get("x", "opt_x_index")
-        y_col = index_config.get("y", "opt_y_index")
-        renames[x_col] = "x_index"
-        renames[y_col] = "y_index"
-
-    if has_coords:
-        coords_config = station_config["coords"]
-        x_col = coords_config.get("x", "opt_x_coord")
-        y_col = coords_config.get("y", "opt_y_coord")
-        renames[x_col] = "x_coord"
-        renames[y_col] = "y_coord"
-
-    if has_index_1d:
-        renames[station_config["index_1d"]] = "index_1d"
+    if station.index_1d is not None:
+        renames[station.index_1d] = "index_1d"
 
     df_renamed = df.rename(columns=renames)
 
-    if has_index and (
+    if station.index is not None and (
         "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
     ):
         raise ValueError(
             "Station file missing required index columns."
             "Expected columns to map to 'x_index' and 'y_index'."
         )
-    if has_coords and (
+    if station.coords is not None and (
         "x_coord" not in df_renamed.columns or "y_coord" not in df_renamed.columns
     ):
         raise ValueError(
             "Station file missing required coordinate columns."
             "Expected columns to map to 'x_coord' and 'y_coord'."
         )
-    if has_index_1d and "index_1d" not in df_renamed.columns:
+    if station.index_1d is not None and "index_1d" not in df_renamed.columns:
         raise ValueError("Station file missing required 'index_1d' column.")
 
     return df_renamed
 
 
-def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Dataset:
+def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
     if "index_1d" not in df.columns:
         raise ValueError("Gribjump source requires 'index_1d' in station config.")
 
@@ -155,14 +172,14 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
     gribjump_config = {
         "source": {
             "gribjump": {
-                **grid_config["source"]["gribjump"],
+                **grid.source["gribjump"],
                 "ranges": ranges,
                 # fetch_coords_from_fdb is currently very slow. Needs fix in
                 # earthkit-data gribjump source.
                 # "fetch_coords_from_fdb": True,
             }
         },
-        "to_xarray_options": grid_config.get("to_xarray_options", {}),
+        "to_xarray_options": grid.to_xarray_options,
     }
 
     masked_da, var_name = load_da(gribjump_config, 2)
@@ -174,9 +191,9 @@ def _process_gribjump(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datas
     return ds
 
 
-def _process_regular(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Dataset:
+def _process_regular(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
     station_names = df["station_name"].values
-    da, var_name, x_dim, y_dim, shape = process_grid_inputs(grid_config)
+    da, var_name, x_dim, y_dim, shape = process_grid_inputs(grid)
 
     use_index = "x_index" in df.columns and "y_index" in df.columns
 
@@ -197,13 +214,26 @@ def _process_regular(grid_config: dict[str, Any], df: pd.DataFrame) -> xr.Datase
     return ds
 
 
-def process_inputs(
-    station_config: dict[str, Any], grid_config: dict[str, Any]
-) -> xr.Dataset:
-    df = parse_stations(station_config)
-    if "gribjump" in grid_config.get("source", {}):
-        return _process_gribjump(grid_config, df)
-    return _process_regular(grid_config, df)
+def process_inputs(station: StationConfig, grid: GridConfig) -> xr.Dataset:
+    """Parse station and grid inputs and route to the appropriate extraction path.
+
+    Parameters
+    ----------
+    station : StationConfig
+        Station configuration.
+    grid : GridConfig
+        Grid configuration. If ``source`` contains a ``gribjump`` key, the
+        gribjump extraction path is used; otherwise the regular path is used.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with a ``station`` dimension containing the extracted timeseries.
+    """
+    df = parse_stations(station)
+    if "gribjump" in grid.source:
+        return _process_gribjump(grid, df)
+    return _process_regular(grid, df)
 
 
 def mask_array_np(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -231,9 +261,22 @@ def apply_mask(
         return task.compute()
 
 
-def extractor(config: dict[str, Any]) -> xr.Dataset:
-    ds = process_inputs(config["station"], config["grid"])
-    if config.get("output", None) is not None:
-        logger.info(f"Saving output to {config['output']['file']}")
-        ds.to_netcdf(config["output"]["file"])
+def extractor(config: ExtractorConfig) -> xr.Dataset:
+    """Run the full extraction pipeline from validated config.
+
+    Parameters
+    ----------
+    config : ExtractorConfig
+        Fully validated extraction configuration.
+
+    Returns
+    -------
+    xr.Dataset
+        Extracted timeseries dataset. Also written to ``config.output.file``
+        if an output path is configured.
+    """
+    ds = process_inputs(config.station, config.grid)
+    if config.output is not None:
+        logger.info(f"Saving output to {config.output.file}")
+        ds.to_netcdf(config.output.file)
     return ds
