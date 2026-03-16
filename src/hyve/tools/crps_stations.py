@@ -239,7 +239,7 @@ def compute_score(
 
     log.debug(crps_refc_mean.isel(station=range(10)))
     crps_refc_mean = crps_refc_mean.rename("crps")
-    crps_refc_mean.to_netcdf("crps_refo.nc")
+    crps_refc_mean.to_netcdf(os.path.join(out_dir, "crps_refo.nc"))
 
     log.debug(crps_pers_mean.isel(station=range(10)))
     crps_pers_mean = xr.zeros_like(crps_refc_mean) + crps_pers_mean
