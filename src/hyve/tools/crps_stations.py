@@ -88,6 +88,7 @@ def forecast_crps(x, y, core_dims=["lat", "lon"]):
         dask="parallelized",
         output_core_dims=[core_dims],
         output_dtypes=[np.float32],
+        join="inner",
     )
     return crps
 
@@ -332,9 +333,8 @@ def main():
             ds_clim = xr.open_dataarray(args.climatology, chunks={"time": 1})
             if core_dim != "station":
                 ds_clim = ds_clim.rename({core_dim: "station"})
-            ds_clim = ds_clim.assign_coords(
-                {"station": ds_reanalysis.coords["station"]}
-            )
+            ds_clim = ds_clim.reindex_like(ds_reanalysis.station)
+            ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station)
             log.debug(ds_clim)
 
         if args.output:
