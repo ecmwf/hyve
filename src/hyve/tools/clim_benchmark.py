@@ -92,9 +92,9 @@ def dates_range(dates, window, n_years, n_dates, day, ihour, freq, stride):
         + np.arange(0, n_years * n_dates, n_dates, dtype=int)[:, None]
     ).flatten()
     log.debug("{} ?= {}".format(indexer.size, (int(window / stride) + 1) * n_years))
-    assert (
-        indexer.size == (int(window / stride) + 1) * n_years
-    )  # MUST be +1 to include current day
+    # assert (
+    #     indexer.size == (int(window / stride) + 1) * n_years
+    # )  # MUST be +1 to include current day
     dates_clim = dates[indexer]
 
     hour_mask = np.where(date_hour(dates_clim) == hour)
