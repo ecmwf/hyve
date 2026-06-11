@@ -88,6 +88,7 @@ def forecast_crps(x, y, core_dims=["lat", "lon"]):
         dask="parallelized",
         output_core_dims=[core_dims],
         output_dtypes=[np.float32],
+        join="inner",
     )
     return crps
 
@@ -106,7 +107,7 @@ def shift_dates(dates, istart, n_dates=104, days=[0, 4]):
     dt = dates[1] - dates[0]
 
     if istart.dtype == np.int64:
-        print("startdate coordinates not provided, reconstructing...")
+        log.info("Start date coordinates not provided, reconstructing...")
         date_year = int(istart % n_dates)
         year_shift = int(istart / n_dates)
         week_shift = int(date_year / len(days))
@@ -141,7 +142,7 @@ def compute_score(
     out_dir, reforecast_dir, ds_reanalysis, ds_clim, core_dims, with_init=False
 ):
 
-    print("\nComputing crps and crpss\n")
+    log.info("\nComputing crps and crpss\n")
 
     reforecast_files = glob.glob(reforecast_dir + "/*.nc")
     da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
@@ -160,37 +161,44 @@ def compute_score(
     log.info("Number of reforecast datasets in folder: " + str(n_dates))
 
     count = 0
-    for reforecast_path in reforecast_files:
+    for ifile, reforecast_path in enumerate(reforecast_files):
 
-        log.info("- {}: {}".format(count, reforecast_path))
+        log.info("- {}: {}".format(ifile, os.path.basename(reforecast_path)))
         ds_reforecast = xr.open_dataset(os.path.join(reforecast_dir, reforecast_path))
 
         set1 = set(ds_reforecast.station.values)
         set2 = set(ds_reanalysis.station.values)
         stations = list(set1.intersection(set2))
         ds_reforecast = ds_reforecast.sel(station=stations)
-        ds_reanalysis = ds_reanalysis.sel(station=stations)
+        ds_reanalysis_local = ds_reanalysis.sel(station=stations)
 
         date_range = ds_reforecast.time
         step = (date_range.values[1] - date_range.values[0]).astype(
             "timedelta64[h]"
         ) / np.timedelta64(1, "h")
-        date_persistence = date_range[0]
+        base_date = pd.to_datetime(date_range[0].astype(int))
+        date_persistence = base_date
         if not with_init:
-            date_persistence = date_persistence - np.timedelta64(int(step), "h")
+            date_persistence = date_persistence - pd.DateOffset(hours=int(step))
         log.info(
-            "First step: {}, time step: {} hours".format(date_range.values[0], step)
+            "First step: {:%Y-%m-%d}, time step: {:.0f} hours".format(base_date, step)
         )
-        log.info("Persistence date is {}".format(date_persistence.values))
+        log.info(f"Persistence date is {date_persistence:%Y-%m-%d %H}h")
 
         reforecast = ds_reforecast["dis"].sel(time=date_range)
         reforecast = reforecast.transpose("time", "ensemble", *core_dims)
 
         # extract arrays of interest
-        reanalysis = ds_reanalysis.sel(time=date_range)
-        persistence = ds_reanalysis.sel(time=date_persistence)
+        reanalysis = ds_reanalysis_local.reindex(time=date_range.values)
+        if reanalysis.isnull().all():
+            log.info(f"Any reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping")
+            continue
+        persistence = ds_reanalysis_local.reindex(time=[date_persistence])
+        if persistence.isnull().all():
+            log.info(f"Cannot build persistence with empty step for date {date_persistence:%Y-%m-%d %H}h. Skipping")
+            continue
 
-        crps_pers = persistence_crps(reanalysis, persistence)
+        crps_pers = persistence_crps(reanalysis.values, persistence.values)
         crps_refo = forecast_crps(reforecast, reanalysis, core_dims=core_dims)
         if ds_clim is not None:
             log.debug(coord_dmh(date_range))
@@ -204,20 +212,20 @@ def compute_score(
             crps_refo, crps_pers = dask.compute(crps_refo, crps_pers)
 
         # write forecast files
-        if out_dir:
-            crps_refo = crps_refo.rename("crps")
-            refo_file = path.join(out_dir, "crps_refo_{:04}.nc".format(int(count)))
-            crps_refo.to_netcdf(refo_file)
-            crps_pers = crps_pers.rename("crps")
-            pers_file = path.join(out_dir, "crps_pers_{:04}.nc".format(int(count)))
-            crps_pers.to_netcdf(pers_file)
-            if ds_clim is not None:
-                crps_clim = crps_clim.rename("crps")
-                clim_file = path.join(out_dir, "crps_clim_{:04}.nc".format(int(count)))
-                crps_clim.to_netcdf(clim_file)
+        crps_refo = crps_refo.rename("crps")
+        refo_file = path.join(out_dir, "crps_refo_{:%Y%m%d}.nc".format(base_date))
+        crps_refo.to_netcdf(refo_file)
+        pers_out = xr.zeros_like(crps_refo) + crps_pers
+        pers_out.name = "crps"
+        pers_file = path.join(out_dir, "crps_pers_{:%Y%m%d}.nc".format(base_date))
+        pers_out.to_netcdf(pers_file)
+        if ds_clim is not None:
+            crps_clim = crps_clim.rename("crps")
+            clim_file = path.join(out_dir, "crps_clim_{:%Y%m%d}.nc".format(base_date))
+            crps_clim.to_netcdf(clim_file)
 
-        crps_refo = crps_refo.drop("time")
-        crps_pers = crps_pers.drop("time")
+        crps_refo = crps_refo.drop_vars("time")
+
         crps_refc_mean = crps_refc_mean + crps_refo
         crps_pers_mean = crps_pers_mean + crps_pers
         if ds_clim is not None:
@@ -227,33 +235,34 @@ def compute_score(
         count += 1
 
     # write statistics files
-    crps_refc_mean = crps_refc_mean / n_dates
-    crps_pers_mean = crps_pers_mean / n_dates
+    crps_refc_mean = crps_refc_mean / count
+    crps_pers_mean = crps_pers_mean / count
 
-    print(crps_refc_mean.isel(station=range(10)))
+    log.debug(crps_refc_mean.isel(station=range(10)))
     crps_refc_mean = crps_refc_mean.rename("crps")
-    crps_refc_mean.to_netcdf("crps_refo.nc")
-    print(crps_pers_mean.isel(station=range(10)))
-    crps_pers_mean = crps_pers_mean.rename("crps")
-    crps_pers_mean.to_netcdf("crps_pers.nc")
+    crps_refc_mean.to_netcdf(os.path.join(out_dir, "crps_refo.nc"))
+
+    log.debug(crps_pers_mean.isel(station=range(10)))
+    crps_pers_mean = xr.zeros_like(crps_refc_mean) + crps_pers_mean
+    crps_pers_mean.name = "crps"
+    crps_pers_mean.to_netcdf(os.path.join(out_dir, "crps_pers.nc"))
 
     crpss_pers = 1 - (crps_refc_mean / crps_pers_mean)
     crpss_pers = crpss_pers.rename("crpss")
-    print(crpss_pers.isel(station=range(10)))
-    crpss_pers.to_netcdf("crpss_pers.nc")
+
+    log.debug(crpss_pers.isel(station=range(10)))
+    crpss_pers.to_netcdf(os.path.join(out_dir, "crpss_pers.nc"))
 
     if ds_clim is not None:
-        crps_clim_mean = crps_clim_mean / n_dates
-        print(crps_clim_mean.isel(station=range(10)))
+        crps_clim_mean = crps_clim_mean / count
+        log.debug(crps_clim_mean.isel(station=range(10)))
         crps_clim_mean = crps_clim_mean.rename("crps")
-        crps_clim_mean.to_netcdf("crps_clim.nc")
+        crps_clim_mean.to_netcdf(os.path.join(out_dir, "crps_clim.nc"))
 
         crpss_clim = 1 - (crps_refc_mean / crps_clim_mean)
         crpss_clim = crpss_clim.rename("crpss")
-        print(crpss_clim.isel(station=range(10)))
-        crpss_clim.to_netcdf("crpss_clim.nc")
-
-    assert count == n_dates
+        log.debug(crpss_clim.isel(station=range(10)))
+        crpss_clim.to_netcdf(os.path.join(out_dir, "crpss_clim.nc"))
 
 
 def main():
@@ -262,7 +271,7 @@ def main():
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")
     parser.add_argument("--reforecast", required=True, help="reforecast dataset folder")
     parser.add_argument("--climatology", help="reanalysis dataset file")
-    parser.add_argument("--output", help="output folder for individual crps values")
+    parser.add_argument("--output", help="output folder for individual crps values", default=".")
     parser.add_argument("--core_dim", default="station", help="name of core dimension")
     parser.add_argument(
         "--with_init",
@@ -299,35 +308,34 @@ def main():
 
         # read first reforecast dataset for check
         reforecast_files = glob.glob(os.path.join(args.reforecast, "*.nc"))
-        print("Found {} files".format(len(reforecast_files)))
-        print(reforecast_files)
+        log.info("Found {} files".format(len(reforecast_files)))
+        log.debug(reforecast_files)
         ds_reforecast = xr.open_dataset(reforecast_files[0])
 
         ds_reforecast = ds_reforecast.rename({core_dim: "station"})
         ds_reanalysis = ds_reanalysis.rename({core_dim: "station"})
 
-        print("Reanalysis dataset from {}:".format(args.reanalysis))
-        print(ds_reanalysis["dis"])
-        print("Reforecast dataset from {}:".format(args.reforecast))
-        print(ds_reforecast["dis"])
+        log.info("Reanalysis dataset from {}:".format(args.reanalysis))
+        log.debug(ds_reanalysis["dis"])
+        log.info("Reforecast dataset from {}:".format(args.reforecast))
+        log.debug(ds_reforecast["dis"])
 
         set1 = set(ds_reforecast.station.values)
         set2 = set(ds_reanalysis.station.values)
         stations = list(set1.intersection(set2))
         ds_reforecast = ds_reforecast.sel(station=stations)
         ds_reanalysis = ds_reanalysis.sel(station=stations)
-        print(ds_reanalysis["dis"])
-        print(ds_reforecast["dis"])
+        log.debug(ds_reanalysis["dis"])
+        log.debug(ds_reforecast["dis"])
 
         ds_clim = None
         if args.climatology:
             ds_clim = xr.open_dataarray(args.climatology, chunks={"time": 1})
             if core_dim != "station":
                 ds_clim = ds_clim.rename({core_dim: "station"})
-            ds_clim = ds_clim.assign_coords(
-                {"station": ds_reanalysis.coords["station"]}
-            )
-            print(ds_clim)
+            ds_clim = ds_clim.reindex_like(ds_reanalysis.station)
+            ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station)
+            log.debug(ds_clim)
 
         if args.output:
             os.makedirs(args.output, exist_ok=True)
@@ -340,3 +348,7 @@ def main():
             core_dims,
             args.with_init,
         )
+
+
+if __name__ == "__main__":
+    main()
