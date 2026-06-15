@@ -74,6 +74,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
+    parser.add_argument(
+        "--worker-count",
+        type=int,
+        default=5,
+        help="Number of concurrent workers"
+    )
     return parser
 
 
@@ -117,7 +123,7 @@ def run(config: ClimConfig, input_path: str, output_path: str, variable: str | N
     )
     logger.info("Built %d (doy, issue_hour) slots", len(slots))
 
-    clim_da = compute_climatology(da, slots, config.percentiles)
+    clim_da = compute_climatology(da, slots, config.percentiles, config.num_workers)
     ds_out = build_output_dataset(clim_da, config, timestep)
 
     if output_path:
@@ -142,10 +148,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         percentiles=args.percentiles,
         start_date=args.start_date,
         end_date=args.end_date,
-        scheduler=args.scheduler,
+        num_workers=args.worker_count,
     )
 
-    with dask.config.set(scheduler=config.scheduler):
+    with dask.config.set(scheduler="threads", num_workers=args.worker_count):
         run(config, args.reanalysis, args.output, args.variable)
 
 
