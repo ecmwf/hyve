@@ -60,8 +60,15 @@ def infer_timestep(time_index: pd.DatetimeIndex) -> pd.Timedelta:
         raise ValueError(
             "time_index must be strictly increasing with no duplicates"
         )
-    if not np.all(diffs == diffs[0]):
-        raise ValueError("time_index has irregular spacing")
+
+    for i in range(0, len(diffs)):
+        if diffs[i] != diffs[0]:
+            if i > 1 and i < len(diffs):
+                print(f'time_index {i} has irregular spacing: {time_index[i-1]} {time_index[i]} {time_index[i+1]}')
+            else:
+                print(f'time_index {i} has irregular spacing: {time_index[i]}')
+            raise ValueError("time_index has irregular spacing")
+
     return pd.Timedelta(diffs[0])
 
 

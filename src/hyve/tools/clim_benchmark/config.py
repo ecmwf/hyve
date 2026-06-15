@@ -52,7 +52,7 @@ class ClimConfig(BaseModel):
     )
     start_date: str | None = None
     end_date: str | None = None
-    scheduler: Literal["synchronous", "threads"] = "threads"
+    num_workers: int
 
     @field_validator("window_days")
     @classmethod
@@ -84,6 +84,13 @@ class ClimConfig(BaseModel):
         if len(set(v)) != len(v):
             raise ValueError(f"percentiles must be unique, got {v}")
         return sorted(v)
+
+    @field_validator("num_workers")
+    @classmethod
+    def _num_workers_valid(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("workers must be grater than 1")
+        return v
 
     @model_validator(mode="after")
     def _window_vs_stride(self) -> "ClimConfig":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 
 import dask
@@ -28,10 +29,16 @@ def _quantile_slot(da_slot: xr.DataArray, quantiles: np.ndarray) -> xr.DataArray
     )
 
 
+def chunked(iterable, size):
+    it = iter(iterable)
+    while batch := list(itertools.islice(it, size)):
+        yield batch
+
 def compute_climatology(
     da: xr.DataArray,
     slots: dict[Slot, np.ndarray],
     percentiles: list[int],
+    worker_count: int
 ) -> xr.DataArray:
     """Compute the full ``(doy, issue_hour, ensemble, *space)`` climatology.
 
@@ -52,12 +59,21 @@ def compute_climatology(
     logger.info("Scheduling %d (doy, issue_hour) slots", len(slots))
 
     delayed_results: dict[Slot, xr.DataArray] = {}
-    for slot_key, indices in slots.items():
-        sub = gather(da, indices)
-        delayed_results[slot_key] = dask.delayed(_quantile_slot)(sub, quantiles)
 
-    computed_list = dask.compute(*delayed_results.values())
-    computed: dict[Slot, xr.DataArray] = dict(zip(delayed_results.keys(), computed_list))
+    computed_list = []
+    keys: List[Slot] = []
+    total_slots = len(slots.items())
+    # Only create 'worker_count' tasks at one time to limit memory usage
+    for i, batch in enumerate(chunked(slots.items(), worker_count)):
+        logger.info("Calculating samples %d - %d of %d", i * worker_count, i*worker_count+worker_count, total_slots)
+        delayed_results: dict[Slot, xr.DataArray] = {}
+        for slot_key, indices in batch:
+            sub = gather(da, indices)
+            delayed_results[slot_key] = dask.delayed(_quantile_slot)(sub, quantiles)
+        batch_keys = list(delayed_results.keys())
+        keys.extend(batch_keys)
+        computed_list.extend(dask.compute(*(delayed_results[k] for k in batch_keys)))
+    computed: dict[Slot, xr.DataArray] = dict(zip(keys, computed_list))
 
     # Build the full output array: (doy, issue_hour, ensemble, *space).
     issue_hours = sorted({ih for (_, ih) in slots.keys()})
