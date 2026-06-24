@@ -77,7 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--worker-count",
         type=int,
-        default=5,
+        default=1,
         help="Number of concurrent workers"
     )
     return parser

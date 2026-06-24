@@ -52,7 +52,10 @@ class ClimConfig(BaseModel):
     )
     start_date: str | None = None
     end_date: str | None = None
-    num_workers: int
+    num_workers: int = Field(
+        default=1,
+        description="Number of concurrent workers used for percentile computation.",
+    )
 
     @field_validator("window_days")
     @classmethod
@@ -89,7 +92,7 @@ class ClimConfig(BaseModel):
     @classmethod
     def _num_workers_valid(cls, v: int) -> int:
         if v < 1:
-            raise ValueError("workers must be grater than 1")
+            raise ValueError(f"num_workers must be >= 1, got {v}")
         return v
 
     @model_validator(mode="after")

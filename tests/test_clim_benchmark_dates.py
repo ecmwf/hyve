@@ -258,6 +258,7 @@ def test_config_default_is_valid():
     c = ClimConfig()
     assert c.window_days == 31
     assert c.stride == "daily"
+    assert c.num_workers == 1
 
 
 def test_config_rejects_even_window():
@@ -290,6 +291,12 @@ def test_config_rejects_issue_freq_not_multiple_of_timestep():
 def test_config_rejects_bad_percentiles():
     with pytest.raises(ValueError):
         ClimConfig(percentiles=[-1, 50, 101])
+
+
+@pytest.mark.parametrize("workers", [0, -1])
+def test_config_rejects_non_positive_num_workers(workers):
+    with pytest.raises(ValueError, match="num_workers"):
+        ClimConfig(num_workers=workers)
 
 
 def test_config_accepts_valid_timestep():
