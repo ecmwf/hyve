@@ -97,38 +97,38 @@ def _select_variable(ds: xr.Dataset, name: str | None) -> xr.DataArray:
 
 def run(config: ClimConfig, input_path: str, output_path: str, variable: str | None) -> xr.Dataset:
     """Execute the full pipeline and return the output dataset."""
-    ds_in = xr.open_dataset(input_path, chunks={})
-    da = _select_variable(ds_in, variable)
-    if config.start_date is not None or config.end_date is not None:
-        da = da.sel(time=slice(config.start_date, config.end_date))
+    with xr.open_dataset(input_path, chunks={}) as ds_in:
+        da = _select_variable(ds_in, variable)
+        if config.start_date is not None or config.end_date is not None:
+            da = da.sel(time=slice(config.start_date, config.end_date))
 
-    time_index = pd.DatetimeIndex(da["time"].values)
-    timestep = infer_timestep(time_index)
-    timestep_hours = timestep.total_seconds() / 3600.0
-    config.validate_against_data(timestep_hours)
+        time_index = pd.DatetimeIndex(da["time"].values)
+        timestep = infer_timestep(time_index)
+        timestep_hours = timestep.total_seconds() / 3600.0
+        config.validate_against_data(timestep_hours)
 
-    logger.info(
-        "timestep=%s, window_days=%d, stride=%s, issue_frequency_hours=%d",
-        timestep,
-        config.window_days,
-        config.stride,
-        config.issue_frequency_hours,
-    )
+        logger.info(
+            "timestep=%s, window_days=%d, stride=%s, issue_frequency_hours=%d",
+            timestep,
+            config.window_days,
+            config.stride,
+            config.issue_frequency_hours,
+        )
 
-    slots = build_slots(
-        da,
-        window_days=config.window_days,
-        stride=config.stride,
-        issue_frequency_hours=config.issue_frequency_hours,
-    )
-    logger.info("Built %d (doy, issue_hour) slots", len(slots))
+        slots = build_slots(
+            da,
+            window_days=config.window_days,
+            stride=config.stride,
+            issue_frequency_hours=config.issue_frequency_hours,
+        )
+        logger.info("Built %d (doy, issue_hour) slots", len(slots))
 
-    clim_da = compute_climatology(da, slots, config.percentiles, config.num_workers)
-    ds_out = build_output_dataset(clim_da, config, timestep)
+        clim_da = compute_climatology(da, slots, config.percentiles, config.num_workers)
+        ds_out = build_output_dataset(clim_da, config, timestep)
 
-    if output_path:
-        logger.info("Writing %s", output_path)
-        write_netcdf(ds_out, output_path)
+        if output_path:
+            logger.info("Writing %s", output_path)
+            write_netcdf(ds_out, output_path)
     return ds_out
 
 
