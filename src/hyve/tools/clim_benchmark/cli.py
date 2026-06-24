@@ -16,7 +16,6 @@ from hyve.tools.clim_benchmark.io import build_output_dataset, write_netcdf
 from hyve.tools.clim_benchmark.percentiles import compute_climatology
 from hyve.tools.clim_benchmark.sampling import build_slots
 
-
 logger = logging.getLogger("hyve-clim-benchmark")
 
 
@@ -75,10 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     parser.add_argument(
-        "--worker-count",
-        type=int,
-        default=1,
-        help="Number of concurrent workers"
+        "--worker-count", type=int, default=1, help="Number of concurrent workers"
     )
     return parser
 
@@ -95,7 +91,9 @@ def _select_variable(ds: xr.Dataset, name: str | None) -> xr.DataArray:
     return ds[data_vars[0]]
 
 
-def run(config: ClimConfig, input_path: str, output_path: str, variable: str | None) -> xr.Dataset:
+def run(
+    config: ClimConfig, input_path: str, output_path: str, variable: str | None
+) -> xr.Dataset:
     """Execute the full pipeline and return the output dataset."""
     with xr.open_dataset(input_path, chunks={}) as ds_in:
         da = _select_variable(ds_in, variable)

@@ -169,7 +169,10 @@ def test_doy366_fallback_when_no_leap_year(tmp_path):
     output_path = str(tmp_path / "clim.nc")
 
     config = ClimConfig(
-        window_days=1, stride="daily", issue_frequency_hours=24, percentiles=[0, 50, 100]
+        window_days=1,
+        stride="daily",
+        issue_frequency_hours=24,
+        percentiles=[0, 50, 100],
     )
     ds = run(config, input_path, output_path, variable="dis")
 

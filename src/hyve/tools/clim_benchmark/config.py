@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 Stride = Literal["daily", "weekly", "monthly"]
 
 # Minimum window size (in days) required for each stride category.

@@ -11,7 +11,6 @@ import pandas as pd
 
 from hyve.tools.clim_benchmark.config import STRIDE_DAYS
 
-
 # Cumulative days before the start of each month on the canonical leap-year
 # calendar used by the custom DOY mapping (month 1 -> 0, month 2 -> 31, ...).
 _DAYS_BEFORE_MONTH_LEAP = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335)
@@ -57,16 +56,16 @@ def infer_timestep(time_index: pd.DatetimeIndex) -> pd.Timedelta:
         raise ValueError("time_index must contain at least 2 timestamps")
     diffs = np.diff(ts.values)
     if np.any(diffs <= np.timedelta64(0, "ns")):
-        raise ValueError(
-            "time_index must be strictly increasing with no duplicates"
-        )
+        raise ValueError("time_index must be strictly increasing with no duplicates")
 
     for i in range(0, len(diffs)):
         if diffs[i] != diffs[0]:
             if i > 1 and i < len(diffs):
-                print(f'time_index {i} has irregular spacing: {time_index[i-1]} {time_index[i]} {time_index[i+1]}')
+                print(
+                    f"time_index {i} has irregular spacing: {time_index[i - 1]} {time_index[i]} {time_index[i + 1]}"
+                )
             else:
-                print(f'time_index {i} has irregular spacing: {time_index[i]}')
+                print(f"time_index {i} has irregular spacing: {time_index[i]}")
             raise ValueError("time_index has irregular spacing")
 
     return pd.Timedelta(diffs[0])
@@ -120,9 +119,9 @@ def _doy_to_indices(time_index: pd.DatetimeIndex) -> dict[int, np.ndarray]:
     }
 
     # Duplicate non-leap Dec 31 into DOY 366.
-    non_leap_dec31 = np.where(
-        (~is_leap_year(years)) & (months == 12) & (days == 31)
-    )[0].astype(np.int64)
+    non_leap_dec31 = np.where((~is_leap_year(years)) & (months == 12) & (days == 31))[
+        0
+    ].astype(np.int64)
     if len(non_leap_dec31) > 0:
         buckets[366] = np.sort(np.concatenate([buckets[366], non_leap_dec31]))
 

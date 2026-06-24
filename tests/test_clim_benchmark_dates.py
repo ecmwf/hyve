@@ -18,7 +18,6 @@ from hyve.tools.clim_benchmark.dates import (
     split_pool_by_issue,
 )
 
-
 # ---------------------------------------------------------------------------
 # infer_timestep
 # ---------------------------------------------------------------------------
@@ -70,9 +69,7 @@ def test_doy_of_jan1_any_year():
 
 
 def test_doy_of_feb28_and_feb29():
-    idx = pd.to_datetime(
-        ["2019-02-28", "2020-02-28", "2020-02-29"]
-    )
+    idx = pd.to_datetime(["2019-02-28", "2020-02-28", "2020-02-29"])
     # Feb 28 is DOY 59 on both calendars; Feb 29 on leap year is DOY 60.
     assert list(doy_of(idx)) == [59, 59, 60]
 
@@ -332,9 +329,9 @@ def test_build_doy_pools_no_duplicate_indices_near_year_end():
     pools = build_doy_pools(time_index, window_days=3, stride="daily")
 
     for doy, idx in pools.items():
-        assert len(idx) == len(np.unique(idx)), (
-            f"Pool for DOY {doy} contains duplicate indices: {idx}"
-        )
+        assert len(idx) == len(
+            np.unique(idx)
+        ), f"Pool for DOY {doy} contains duplicate indices: {idx}"
 
 
 def test_dec31_not_overweighted_in_percentiles_near_year_end():
@@ -483,6 +480,7 @@ def test_compute_climatology_batches_by_worker_count():
     call and verifies that no call exceeds worker_count.
     """
     import unittest.mock as mock
+
     import xarray as xr
 
     from hyve.tools.clim_benchmark.percentiles import compute_climatology
@@ -503,9 +501,13 @@ def test_compute_climatology_batches_by_worker_count():
             call_sizes.append(len(args))
             return original_compute(*args, **kwargs)
 
-        with mock.patch("hyve.tools.clim_benchmark.percentiles.dask.compute",
-                        side_effect=_recording_compute):
-            result = compute_climatology(da, slots, percentiles=[50], worker_count=worker_count)
+        with mock.patch(
+            "hyve.tools.clim_benchmark.percentiles.dask.compute",
+            side_effect=_recording_compute,
+        ):
+            result = compute_climatology(
+                da, slots, percentiles=[50], worker_count=worker_count
+            )
 
         assert result is not None
         assert len(call_sizes) > 0, "dask.compute was never called"
@@ -534,9 +536,13 @@ def test_compute_climatology_results_independent_of_worker_count():
     da = xr.DataArray(values, dims=("time",), coords={"time": time}, name="x")
     slots = build_slots(da, window_days=3, stride="daily", issue_frequency_hours=24)
 
-    ref = compute_climatology(da, slots, percentiles=[0, 50, 100], worker_count=len(slots))
+    ref = compute_climatology(
+        da, slots, percentiles=[0, 50, 100], worker_count=len(slots)
+    )
     for wc in (1, 7, 50):
-        result = compute_climatology(da, slots, percentiles=[0, 50, 100], worker_count=wc)
+        result = compute_climatology(
+            da, slots, percentiles=[0, 50, 100], worker_count=wc
+        )
         np.testing.assert_array_equal(
             result.values,
             ref.values,

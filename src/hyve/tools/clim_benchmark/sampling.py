@@ -6,11 +6,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from hyve.tools.clim_benchmark.dates import (
-    build_doy_pools,
-    split_pool_by_issue,
-)
-
+from hyve.tools.clim_benchmark.dates import build_doy_pools, split_pool_by_issue
 
 Slot = tuple[int, int]  # (doy, issue_hour)
 

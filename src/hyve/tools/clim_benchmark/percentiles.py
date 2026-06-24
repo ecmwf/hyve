@@ -11,7 +11,6 @@ import xarray as xr
 
 from hyve.tools.clim_benchmark.sampling import Slot, gather
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,11 +33,12 @@ def chunked(iterable, size):
     while batch := list(itertools.islice(it, size)):
         yield batch
 
+
 def compute_climatology(
     da: xr.DataArray,
     slots: dict[Slot, np.ndarray],
     percentiles: list[int],
-    worker_count: int
+    worker_count: int,
 ) -> xr.DataArray:
     """Compute the full ``(doy, issue_hour, ensemble, *space)`` climatology.
 
@@ -65,7 +65,12 @@ def compute_climatology(
     total_slots = len(slots.items())
     # Only create 'worker_count' tasks at one time to limit memory usage
     for i, batch in enumerate(chunked(slots.items(), worker_count)):
-        logger.info("Calculating samples %d - %d of %d", i * worker_count, i*worker_count+worker_count, total_slots)
+        logger.info(
+            "Calculating samples %d - %d of %d",
+            i * worker_count,
+            i * worker_count + worker_count,
+            total_slots,
+        )
         delayed_results: dict[Slot, xr.DataArray] = {}
         for slot_key, indices in batch:
             sub = gather(da, indices)
