@@ -8,6 +8,7 @@ import pytest
 
 from hyve.tools.clim_benchmark.config import ClimConfig
 from hyve.tools.clim_benchmark.dates import (
+    _doy_to_indices,
     build_doy_pools,
     doy_of,
     doy_to_month_day,
@@ -303,3 +304,159 @@ def test_config_accepts_valid_timestep():
     c = ClimConfig(issue_frequency_hours=12)
     c.validate_against_data(timestep_hours=6)  # 12 / 6 == 2
     c.validate_against_data(timestep_hours=3)  # 12 / 3 == 4
+
+
+# ---------------------------------------------------------------------------
+# Regression: non-leap Dec 31 duplication must not double-count in pools
+# ---------------------------------------------------------------------------
+
+
+def test_build_doy_pools_no_duplicate_indices_near_year_end():
+    """Regression for the pre-fix bug where _doy_to_indices() added non-leap
+    Dec 31 indices to BOTH DOY 365 and DOY 366, and build_doy_pools() could
+    pull both source DOYs into the same target pool via a multi-day window,
+    causing each Dec 31 timestamp to appear twice.
+
+    With window_days=3 and stride="daily" the offsets are [-1, 0, +1].
+    For target DOY 365 the source DOYs are 364, 365, 366 – both 365 and 366
+    contain non-leap Dec 31 indices, so without deduplication each Dec 31
+    index would appear twice.
+
+    This test verifies that every pool contains strictly unique indices.
+    """
+    # Three full non-leap years so we have multiple Dec 31 timestamps.
+    time_index = pd.date_range("2021-01-01", "2023-12-31", freq="1D")
+    assert not any(time_index.is_leap_year)
+
+    pools = build_doy_pools(time_index, window_days=3, stride="daily")
+
+    for doy, idx in pools.items():
+        assert len(idx) == len(np.unique(idx)), (
+            f"Pool for DOY {doy} contains duplicate indices: {idx}"
+        )
+
+
+def test_dec31_not_overweighted_in_percentiles_near_year_end():
+    """Regression for the same bug, verified through percentile computation.
+
+    With window_days=5 and stride="daily" the offsets are [-2,-1,0,+1,+2].
+    For target DOY 365 the source DOYs are 363, 364, 365, 366, 1.
+    DOY 365 and DOY 366 both contain the same non-leap Dec 31 positional
+    indices, so before deduplication each Dec 31 timestamp contributes twice.
+
+    Pool sizes:
+      Without fix: Dec29×3 + Dec30×3 + Dec31×3 + Dec31×3 (dup) + Jan1×3 = 15
+                   → 9×1 and 6×999 → median (rank 8) = 999
+      With fix:    Dec29×3 + Dec30×3 + Dec31×3 + Jan1×3 = 12
+                   → 9×1 and 3×999 → median (rank 6.5) = 1
+
+    The test passes iff the fix is active: the median must be 1.0, not 999.
+    """
+    import xarray as xr
+
+    from hyve.tools.clim_benchmark.percentiles import compute_climatology
+    from hyve.tools.clim_benchmark.sampling import build_slots
+
+    # Three non-leap years; all values = 1 except Dec 31 which is a large
+    # outlier.  If Dec 31 is double-counted in the DOY 365 pool it becomes
+    # the majority and biases the median.
+    time = pd.date_range("2021-01-01", "2023-12-31", freq="1D")
+    assert not any(time.is_leap_year)
+    values = np.ones(len(time), dtype=np.float64)
+    is_dec31 = (time.month == 12) & (time.day == 31)
+    values[is_dec31] = 999.0
+    da = xr.DataArray(values, dims=("time",), coords={"time": time}, name="dis")
+
+    # window_days=5: offsets [-2,-1,0,+1,+2] pull src DOYs 363,364,365,366,1.
+    # DOY 365 and 366 map to the same Dec 31 positional indices; without
+    # np.unique they are concatenated twice, making Dec 31 the majority.
+    slots = build_slots(da, window_days=5, stride="daily", issue_frequency_hours=24)
+    clim = compute_climatology(da, slots, percentiles=[50], worker_count=1)
+
+    # After deduplication: 9 samples with value=1, 3 with value=999, median=1.
+    median_doy365 = float(clim.sel(doy=365, issue_hour=0, ensemble=50).values)
+    assert median_doy365 == 1.0, (
+        f"Median for DOY 365 is {median_doy365}, expected 1.0 – "
+        "Dec 31 outlier appears overweighted, possible duplication bug."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Performance regression: _doy_to_indices must not use a Python for-loop
+# over every timestamp (bottleneck for multi-decadal sub-daily reanalyses).
+# PR review comment: https://github.com/ecmwf/hyve/pull/33#discussion_r3100264404
+# ---------------------------------------------------------------------------
+
+
+def test_doy_to_indices_is_fast_on_large_input():
+    """_doy_to_indices should complete in <200 ms for 50 years of hourly data.
+
+    The original implementation iterates over every timestamp with a Python
+    for-loop (``for i, d in enumerate(doys): buckets[int(d)].append(i)``).
+    For 50 years × 365.25 × 24 ≈ 438 k timestamps this typically takes
+    ~300–800 ms in CPython.  A fully vectorised implementation using
+    np.argsort + np.searchsorted stays well under 100 ms on the same input.
+    The 200 ms threshold is intentionally set between the two so that the
+    test fails on the loop implementation and passes on the vectorised one.
+    """
+    import time
+
+    time_index = pd.date_range("1970-01-01", "2019-12-31", freq="1h")
+    # ~438 400 timestamps — representative of 50 years of hourly reanalysis.
+
+    t0 = time.perf_counter()
+    result = _doy_to_indices(time_index)
+    elapsed = time.perf_counter() - t0
+
+    # Sanity-check: all 366 DOYs present, total count correct.
+    assert set(result.keys()) == set(range(1, 367))
+    total = sum(len(v) for v in result.values())
+    # Non-leap Dec 31 entries appear in both DOY 365 and 366, so the sum
+    # exceeds len(time_index).
+    assert total >= len(time_index)
+
+    assert elapsed < 0.2, (
+        f"_doy_to_indices took {elapsed:.3f}s for {len(time_index):,} timestamps "
+        f"(limit 0.2s). The Python for-loop implementation is too slow; "
+        f"replace with a vectorised np.argsort / np.searchsorted approach."
+    )
+
+
+def test_doy_to_indices_vectorised_matches_loop_reference():
+    """Correctness check: vectorised result must equal the naive loop result.
+
+    Uses a mixed dataset that spans multiple leap and non-leap years and
+    includes 6-hourly sub-daily resolution so that every edge case
+    (Feb 29, non-leap Dec 31 duplication, year wrap) is exercised.
+    """
+    time_index = pd.date_range("2016-01-01", "2024-12-31T18", freq="6h")
+
+    # Reference: the pure-Python loop implementation (copied verbatim from
+    # the version that existed before the vectorisation fix so the test is
+    # independent of production code).
+    def _doy_to_indices_loop(ti: pd.DatetimeIndex) -> dict[int, np.ndarray]:
+        ts = pd.DatetimeIndex(ti)
+        doys = doy_of(ts)
+        years = ts.year.to_numpy()
+        months = ts.month.to_numpy()
+        days = ts.day.to_numpy()
+        buckets: dict[int, list[int]] = {d: [] for d in range(1, 367)}
+        for i, d in enumerate(doys):
+            buckets[int(d)].append(i)
+        non_leap_dec31 = np.where(
+            (~is_leap_year(years)) & (months == 12) & (days == 31)
+        )[0]
+        for i in non_leap_dec31:
+            buckets[366].append(int(i))
+        return {d: np.asarray(sorted(ix), dtype=np.int64) for d, ix in buckets.items()}
+
+    reference = _doy_to_indices_loop(time_index)
+    result = _doy_to_indices(time_index)
+
+    assert set(result.keys()) == set(reference.keys())
+    for doy in range(1, 367):
+        np.testing.assert_array_equal(
+            result[doy],
+            reference[doy],
+            err_msg=f"Mismatch at DOY {doy}",
+        )

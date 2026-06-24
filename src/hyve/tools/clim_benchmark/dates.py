@@ -91,24 +91,42 @@ def _stride_offsets(window_days: int, stride: str) -> np.ndarray:
 
 def _doy_to_indices(time_index: pd.DatetimeIndex) -> dict[int, np.ndarray]:
     """Map each DOY in 1..366 to the positional indices contributing to
-    it.  Non-leap Dec 31 samples are added to BOTH DOY 365 and 366."""
+    it.  Non-leap Dec 31 samples are added to BOTH DOY 365 and 366.
+
+    Uses a fully vectorised np.argsort + np.searchsorted approach instead
+    of a Python for-loop so it scales to multi-decadal sub-daily inputs
+    without becoming a bottleneck.
+    """
     ts = pd.DatetimeIndex(time_index)
     doys = doy_of(ts)
     years = ts.year.to_numpy()
     months = ts.month.to_numpy()
     days = ts.day.to_numpy()
 
-    buckets: dict[int, list[int]] = {d: [] for d in range(1, 367)}
-    for i, d in enumerate(doys):
-        buckets[int(d)].append(i)
+    # Sort all positional indices by DOY (stable → time-order preserved
+    # within each DOY group, so each bucket is already sorted by position).
+    all_indices = np.arange(len(doys), dtype=np.int64)
+    sort_order = np.argsort(doys, kind="stable")
+    sorted_doys = doys[sort_order]
+    sorted_indices = all_indices[sort_order]
+
+    # For each target DOY 1..366 find its slice in the sorted arrays.
+    target_doys = np.arange(1, 367)
+    left = np.searchsorted(sorted_doys, target_doys, side="left")
+    right = np.searchsorted(sorted_doys, target_doys, side="right")
+
+    buckets: dict[int, np.ndarray] = {
+        int(d): sorted_indices[left[d - 1] : right[d - 1]] for d in target_doys
+    }
+
     # Duplicate non-leap Dec 31 into DOY 366.
     non_leap_dec31 = np.where(
         (~is_leap_year(years)) & (months == 12) & (days == 31)
-    )[0]
-    for i in non_leap_dec31:
-        buckets[366].append(int(i))
+    )[0].astype(np.int64)
+    if len(non_leap_dec31) > 0:
+        buckets[366] = np.sort(np.concatenate([buckets[366], non_leap_dec31]))
 
-    return {d: np.asarray(sorted(ix), dtype=np.int64) for d, ix in buckets.items()}
+    return buckets
 
 
 def build_doy_pools(
