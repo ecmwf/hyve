@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dask
 import numpy as np
 import pandas as pd
 import pytest
@@ -459,4 +460,85 @@ def test_doy_to_indices_vectorised_matches_loop_reference():
             result[doy],
             reference[doy],
             err_msg=f"Mismatch at DOY {doy}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Regression: compute_climatology must process slots in batches of worker_count
+# so that peak memory is bounded (not all slots computed at once).
+# PR review comment: https://github.com/ecmwf/hyve/pull/33#discussion_r3100264319
+# ---------------------------------------------------------------------------
+
+
+def test_compute_climatology_batches_by_worker_count():
+    """dask.compute() must be called with at most worker_count arguments per
+    call, not with all slots at once.
+
+    The original implementation used a single
+    ``dask.compute(*delayed_results.values())`` which submits every slot task
+    simultaneously and materialises every result in RAM before building the
+    output array -- negating the "bounded by one slot" memory intent.
+
+    This test patches dask.compute to count the number of tasks submitted per
+    call and verifies that no call exceeds worker_count.
+    """
+    import unittest.mock as mock
+    import xarray as xr
+
+    from hyve.tools.clim_benchmark.percentiles import compute_climatology
+    from hyve.tools.clim_benchmark.sampling import build_slots
+
+    # Small dataset: 3 years daily so slots are non-trivial but fast.
+    time = pd.date_range("2021-01-01", "2023-12-31", freq="1D")
+    values = np.arange(len(time), dtype=np.float64)
+    da = xr.DataArray(values, dims=("time",), coords={"time": time}, name="x")
+    slots = build_slots(da, window_days=1, stride="daily", issue_frequency_hours=24)
+    total_slots = len(slots)  # 366
+
+    for worker_count in (1, 5, total_slots):
+        call_sizes: list[int] = []
+        original_compute = dask.compute
+
+        def _recording_compute(*args, **kwargs):
+            call_sizes.append(len(args))
+            return original_compute(*args, **kwargs)
+
+        with mock.patch("hyve.tools.clim_benchmark.percentiles.dask.compute",
+                        side_effect=_recording_compute):
+            result = compute_climatology(da, slots, percentiles=[50], worker_count=worker_count)
+
+        assert result is not None
+        assert len(call_sizes) > 0, "dask.compute was never called"
+        max_batch = max(call_sizes)
+        assert max_batch <= worker_count, (
+            f"worker_count={worker_count}: dask.compute was called with "
+            f"{max_batch} tasks in one call (limit {worker_count}). "
+            f"All {total_slots} slots are being scheduled at once."
+        )
+
+
+def test_compute_climatology_results_independent_of_worker_count():
+    """Output must be identical regardless of worker_count batching.
+
+    Verifies that the batching strategy is transparent: splitting the work
+    into smaller dask.compute calls produces the same numerical output as
+    computing all slots in one call (worker_count >= total_slots).
+    """
+    import xarray as xr
+
+    from hyve.tools.clim_benchmark.percentiles import compute_climatology
+    from hyve.tools.clim_benchmark.sampling import build_slots
+
+    time = pd.date_range("2021-01-01", "2022-12-31", freq="1D")
+    values = np.arange(len(time), dtype=np.float64)
+    da = xr.DataArray(values, dims=("time",), coords={"time": time}, name="x")
+    slots = build_slots(da, window_days=3, stride="daily", issue_frequency_hours=24)
+
+    ref = compute_climatology(da, slots, percentiles=[0, 50, 100], worker_count=len(slots))
+    for wc in (1, 7, 50):
+        result = compute_climatology(da, slots, percentiles=[0, 50, 100], worker_count=wc)
+        np.testing.assert_array_equal(
+            result.values,
+            ref.values,
+            err_msg=f"Results differ for worker_count={wc} vs worker_count={len(slots)}",
         )

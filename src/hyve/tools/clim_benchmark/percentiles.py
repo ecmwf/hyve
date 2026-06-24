@@ -61,7 +61,7 @@ def compute_climatology(
     delayed_results: dict[Slot, xr.DataArray] = {}
 
     computed_list = []
-    keys: List[Slot] = []
+    keys: list[Slot] = []
     total_slots = len(slots.items())
     # Only create 'worker_count' tasks at one time to limit memory usage
     for i, batch in enumerate(chunked(slots.items(), worker_count)):
