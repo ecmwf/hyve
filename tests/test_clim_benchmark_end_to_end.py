@@ -178,6 +178,68 @@ def test_doy366_fallback_when_no_leap_year(tmp_path):
     np.testing.assert_array_equal(p365, p366)
 
 
+def test_simple_case_daily_window_daily_issue_single_median_with_missing_data(tmp_path):
+    """Simple-case regression with a larger mixed-year dataset.
+
+    Scenario under test:
+    - daily data
+    - daily window (window_days=1, stride='daily')
+    - one issue time (issue_frequency_hours=24 -> issue_hour=0)
+    - one quantile (median, i.e. percentile 50)
+
+    Expected behavior: output value for each DOY is the climatological median
+    of source samples mapped to that DOY, including the non-leap Dec 31
+    duplication rule for DOY 366. Missing values must be ignored in the
+    percentile computation.
+    """
+    from hyve.tools.clim_benchmark.dates import doy_of, is_leap_year
+
+    # Large synthetic dataset spanning leap and non-leap years.
+    time = pd.date_range("1985-01-01", "2024-12-31", freq="1D")
+    years = time.year.to_numpy()
+
+    # Deterministic signal with year-to-year variation.
+    signal = doy_of(time).astype(np.float64) + 0.1 * (years - years.min())
+
+    # Inject deterministic missing data (~8%) so NaN handling is exercised.
+    rng = np.random.default_rng(12345)
+    missing_mask = rng.random(len(time)) < 0.08
+    signal[missing_mask] = np.nan
+
+    da = xr.DataArray(signal, dims=("time",), coords={"time": time}, name="dis")
+    input_path = _make_dataset_file(tmp_path, da)
+    output_path = str(tmp_path / "clim.nc")
+
+    config = ClimConfig(
+        window_days=1,
+        stride="daily",
+        issue_frequency_hours=24,
+        percentiles=[50],
+    )
+    ds = run(config, input_path, output_path, variable="dis")
+
+    assert ds.sizes["issue_hour"] == 1
+    assert ds.sizes["ensemble"] == 1
+    assert int(ds["issue_hour"].values[0]) == 0
+    assert int(ds["ensemble"].values[0]) == 50
+
+    # Independent expected medians per DOY (including DOY 366 fallback rule).
+    doys = doy_of(time)
+    months = time.month.to_numpy()
+    days = time.day.to_numpy()
+    non_leap_dec31 = np.where((~is_leap_year(years)) & (months == 12) & (days == 31))[0]
+
+    expected = np.empty(366, dtype=np.float64)
+    for doy in range(1, 367):
+        idx = np.where(doys == doy)[0]
+        if doy == 366 and len(non_leap_dec31) > 0:
+            idx = np.concatenate([idx, non_leap_dec31])
+        expected[doy - 1] = np.nanmedian(signal[idx])
+
+    actual = ds["dis"].sel(issue_hour=0, ensemble=50).values
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0, equal_nan=True)
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point smoke test
 # ---------------------------------------------------------------------------
