@@ -82,7 +82,14 @@ def compute_climatology(
     space_coords = {d: da.coords[d] for d in space_dims if d in da.coords}
 
     out_shape = (366, len(issue_hours), len(percentiles), *space_sizes.values())
-    out_dtype = next(iter(computed.values())).dtype if computed else da.dtype
+    if computed:
+        out_dtype = next(iter(computed.values())).dtype
+    else:
+        out_dtype = (
+            np.float64
+            if np.issubdtype(da.dtype, np.integer) or np.issubdtype(da.dtype, np.bool_)
+            else da.dtype
+        )
     data = np.full(out_shape, np.nan, dtype=out_dtype)
 
     doy_index = {d: i for i, d in enumerate(range(1, 367))}
