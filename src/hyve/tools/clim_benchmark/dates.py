@@ -139,7 +139,12 @@ def build_doy_pools(
             src_doy = ((target_doy - 1 + int(off)) % 366) + 1
             parts.append(doy_to_idx[src_doy])
         if parts:
-            pools[target_doy] = np.concatenate(parts)
+            # `_doy_to_indices()` intentionally aliases non-leap Dec 31 into
+            # both DOY 365 and 366. When a centered window pulls both source
+            # DOYs into the same target pool, the same positional index can
+            # appear more than once; de-duplicate so each timestamp
+            # contributes at most once per target DOY.
+            pools[target_doy] = np.unique(np.concatenate(parts))
         else:  # pragma: no cover - _stride_offsets always returns >=1 offset
             pools[target_doy] = np.asarray([], dtype=np.int64)
     return pools
