@@ -191,11 +191,15 @@ def compute_score(
         # extract arrays of interest
         reanalysis = ds_reanalysis_local.reindex(time=date_range.values)
         if reanalysis.isnull().all():
-            log.info(f"Any reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping")
+            log.info(
+                f"Any reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping"
+            )
             continue
         persistence = ds_reanalysis_local.reindex(time=[date_persistence])
         if persistence.isnull().all():
-            log.info(f"Cannot build persistence with empty step for date {date_persistence:%Y-%m-%d %H}h. Skipping")
+            log.info(
+                f"Cannot build persistence with empty step for date {date_persistence:%Y-%m-%d %H}h. Skipping"
+            )
             continue
 
         crps_pers = persistence_crps(reanalysis.values, persistence.values)
@@ -271,7 +275,9 @@ def main():
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")
     parser.add_argument("--reforecast", required=True, help="reforecast dataset folder")
     parser.add_argument("--climatology", help="reanalysis dataset file")
-    parser.add_argument("--output", help="output folder for individual crps values", default=".")
+    parser.add_argument(
+        "--output", help="output folder for individual crps values", default="."
+    )
     parser.add_argument("--core_dim", default="station", help="name of core dimension")
     parser.add_argument(
         "--with_init",
