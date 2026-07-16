@@ -78,7 +78,7 @@ line_length = 88
 line-length = 88
 
 [tool.setuptools.packages.find]
-include = [ "hyve" ]
+include = [ "hyve", "hyve.*" ]
 where = [ "src/" ]
 
 [tool.setuptools_scm]
