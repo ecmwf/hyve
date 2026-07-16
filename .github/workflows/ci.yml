@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: ci
 
 on:
@@ -15,6 +19,10 @@ jobs:
     uses: ecmwf/reusable-workflows/.github/workflows/qa-pytest-pyproject.yml@v2
     secrets: inherit
 
-  # qa-python:
-  #     uses: ecmwf/reusable-workflows/.github/workflows/ci-python.yml@v2
-  #     secrets: inherit
+  reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0   # v7.0.0
+      - uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5  # v 6.0.0
+        with:
+          args: spdx

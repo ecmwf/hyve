@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
+# SPDX-FileCopyrightText: 2026 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
+import datetime
 import glob
 import logging as log
 import os
@@ -132,10 +137,14 @@ def shift_dates(dates, istart, n_dates=104, days=[0, 4]):
     return new_dates
 
 
-def coord_dmh(dates):
-    dates_str = np.datetime_as_string(dates, unit="h")
-    days_months = [date[5:] for date in dates_str]
-    return days_months
+def coord_doy(
+    dates: list[datetime.datetime] | pd.DatetimeIndex | xr.DataArray,
+) -> np.ndarray[int]:
+    if isinstance(dates, (xr.DataArray, pd.DatetimeIndex)):
+        doys = dates.dt.dayofyear.values
+    else:
+        doys = pd.to_datetime(dates).dayofyear.values
+    return doys
 
 
 def compute_score(
@@ -205,9 +214,12 @@ def compute_score(
         crps_pers = persistence_crps(reanalysis.values, persistence.values)
         crps_refo = forecast_crps(reforecast, reanalysis, core_dims=core_dims)
         if ds_clim is not None:
-            log.debug(coord_dmh(date_range))
-            climatology = ds_clim.sel(time=coord_dmh(date_range))
-            climatology.coords["time"] = date_range
+            log.debug(coord_doy(date_range))
+            climatology = (
+                ds_clim.sel(doy=coord_doy(date_range))
+                .assign_coords(doy=date_range.values)
+                .rename(doy="time")
+            )
             crps_clim = forecast_crps(climatology, reanalysis, core_dims=core_dims)
             crps_refo, crps_pers, crps_clim = dask.compute(
                 crps_refo, crps_pers, crps_clim
@@ -233,7 +245,7 @@ def compute_score(
         crps_refc_mean = crps_refc_mean + crps_refo
         crps_pers_mean = crps_pers_mean + crps_pers
         if ds_clim is not None:
-            crps_clim = crps_clim.drop("time")
+            crps_clim = crps_clim.drop_vars("time")
             crps_clim_mean = crps_clim_mean + crps_clim
 
         count += 1
@@ -340,7 +352,9 @@ def main():
             if core_dim != "station":
                 ds_clim = ds_clim.rename({core_dim: "station"})
             ds_clim = ds_clim.reindex_like(ds_reanalysis.station)
-            ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station)
+            ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station).sel(
+                issue_hour=0
+            )
             log.debug(ds_clim)
 
         if args.output:

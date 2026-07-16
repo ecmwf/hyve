@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure date/index logic for building DOY-indexed sampling pools.
 
 The module is deliberately self-contained and side-effect free so it can
