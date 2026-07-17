@@ -135,6 +135,12 @@ def parse_stations(station: StationConfig) -> pd.DataFrame:
 
     df_renamed = df.rename(columns=renames)
 
+    if "station_name" not in df_renamed.columns:
+        raise ValueError(
+            f"Station file missing required name column '{station.name}'."
+            "Expected column to map to 'station_name'."
+        )
+
     if station.index is not None and (
         "x_index" not in df_renamed.columns or "y_index" not in df_renamed.columns
     ):
