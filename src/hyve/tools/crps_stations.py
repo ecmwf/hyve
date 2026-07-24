@@ -149,7 +149,7 @@ def compute_score(
 
     log.info("\nComputing crps and crpss\n")
 
-    reforecast_files = glob.glob(reforecast_dir + "/*.nc")
+    reforecast_files = sorted(glob.glob(reforecast_dir + "/*.nc"))[::-1]
     da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
     set1 = set(da_ref.station.values)
     set2 = set(ds_reanalysis.station.values)
@@ -195,10 +195,16 @@ def compute_score(
 
         # extract arrays of interest
         reanalysis = ds_reanalysis_local.reindex(time=date_range.values)
-        if reanalysis.isnull().all():
-            log.info(
-                f"Any reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping"
-            )
+        if reanalysis.isnull().any():
+            msg = f"Gaps in the reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping"
+            if reanalysis.isnull().any(dim="time").all():
+                (missing_steps,) = np.where(reanalysis.isel(station=0).isnull().values)
+                missing_steps = (
+                    np.array([np.timedelta64(step, "h") for step in missing_steps])
+                    + base_date
+                )
+                msg += f"\n Gaps in all stations for step(s) {missing_steps.tolist()}"
+            log.info(msg)
             continue
         persistence = ds_reanalysis_local.reindex(time=[date_persistence])
         if persistence.isnull().all():
