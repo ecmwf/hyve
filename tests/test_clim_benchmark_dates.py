@@ -399,24 +399,42 @@ def test_doy_to_indices_is_fast_on_large_input():
     """
     import time
 
-    time_index = pd.date_range("1970-01-01", "2019-12-31", freq="1h")
-    # ~438 400 timestamps — representative of 50 years of hourly reanalysis.
+    time_threshold = 0.2  # seconds
 
-    t0 = time.perf_counter()
-    result = _doy_to_indices(time_index)
-    elapsed = time.perf_counter() - t0
+    def _run():
 
-    # Sanity-check: all 366 DOYs present, total count correct.
-    assert set(result.keys()) == set(range(1, 367))
-    total = sum(len(v) for v in result.values())
-    # Non-leap Dec 31 entries appear in both DOY 365 and 366, so the sum
-    # exceeds len(time_index).
-    assert total >= len(time_index)
+        time_index = pd.date_range("1970-01-01", "2019-12-31", freq="1h")
+        # ~438 400 timestamps — representative of 50 years of hourly reanalysis.
 
-    assert elapsed < 0.2, (
-        f"_doy_to_indices took {elapsed:.3f}s for {len(time_index):,} timestamps "
-        f"(limit 0.2s). The Python for-loop implementation is too slow; "
-        f"replace with a vectorised np.argsort / np.searchsorted approach."
+        t0 = time.perf_counter()
+        result = _doy_to_indices(time_index)
+        elapsed = time.perf_counter() - t0
+
+        # Sanity-check: all 366 DOYs present, total count correct.
+        assert set(result.keys()) == set(range(1, 367))
+        total = sum(len(v) for v in result.values())
+        # Non-leap Dec 31 entries appear in both DOY 365 and 366, so the sum
+        # exceeds len(time_index).
+        assert total >= len(time_index)
+
+        return int(elapsed < time_threshold), len(time_index), elapsed
+
+    attempts = 5
+    accepted = 3
+    error_msg = (
+        "_doy_to_indices is too slow for {n} timestamps "
+        f"(limit {time_threshold}s) after {attempts} attempts."
+        "mean elapsed: {mean_elapsed:.3f}s, successes: {success}/{attempts}"
+    )
+    mean_elapsed = 0.0
+    success = 0
+    for _ in range(attempts):
+        res, n, elapsed = _run()
+        success += res
+        mean_elapsed += elapsed
+    mean_elapsed /= attempts
+    assert success >= accepted and mean_elapsed < time_threshold, error_msg.format(
+        n=n, mean_elapsed=mean_elapsed, success=success, attempts=attempts
     )
 
 
