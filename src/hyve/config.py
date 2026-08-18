@@ -29,6 +29,7 @@ class StationConfig(StrictBaseModel):
     index: Optional[IndexMapping] = None
     coords: Optional[CoordMapping] = None
     index_1d: Optional[str] = None
+    ups_area: Optional[str] = None
     filter: Optional[str] = None
 
     @model_validator(mode="after")

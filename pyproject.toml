@@ -31,7 +31,7 @@ dependencies = [
     "pandas",
     "pydantic>=2",
     "xarray",
-    "earthkit-data>=0.18.2",
+    "earthkit-data~=0.20",
 ]
 
 [project.urls]
