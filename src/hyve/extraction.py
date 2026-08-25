@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def process_grid_inputs(
     grid: GridConfig,
-) -> tuple[xr.DataArray, str, str, str, tuple[int, int]]:
+) -> tuple[xr.DataArray, str, str, str, tuple[int, int], dict[str, Any]]:
     """Load a DataArray from the grid source and return spatial metadata.
 
     Parameters
@@ -34,7 +35,7 @@ def process_grid_inputs(
     shape : tuple[int, int]
         Grid shape (n_x, n_y).
     """
-    da, var_name = load_da(
+    da, var_name, ds_attrs = load_da(
         {"source": grid.source, "to_xarray_options": grid.to_xarray_options}, 3
     )
     logger.info(f"Xarray created from source:\n{da}\n")
@@ -42,7 +43,7 @@ def process_grid_inputs(
     y_dim = grid.coords.y
     da = da.sortby([x_dim, y_dim])
     shape = da[x_dim].shape[0], da[y_dim].shape[0]
-    return da, var_name, x_dim, y_dim, shape
+    return da, var_name, x_dim, y_dim, shape, ds_attrs
 
 
 def construct_mask(x_indices, y_indices, shape):
@@ -188,9 +189,9 @@ def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
         "to_xarray_options": grid.to_xarray_options,
     }
 
-    masked_da, var_name = load_da(gribjump_config, 2)
+    masked_da, var_name, ds_attrs = load_da(gribjump_config, 2)
 
-    ds = xr.Dataset({var_name: masked_da})
+    ds = xr.Dataset({var_name: masked_da}, attrs=ds_attrs)
     ds = ds.isel(index=duplication_indexes)
     ds = ds.rename({"index": "station"})
     ds["station"] = station_names
@@ -199,7 +200,7 @@ def _process_gribjump(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
 
 def _process_regular(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
     station_names = df["station_name"].values
-    da, var_name, x_dim, y_dim, shape = process_grid_inputs(grid)
+    da, var_name, x_dim, y_dim, shape, ds_attrs = process_grid_inputs(grid)
 
     use_index = "x_index" in df.columns and "y_index" in df.columns
 
@@ -213,7 +214,7 @@ def _process_regular(grid: GridConfig, df: pd.DataFrame) -> xr.Dataset:
     logger.info("Extracting timeseries at selected stations")
     masked_da = apply_mask(da, mask, x_dim, y_dim)
 
-    ds = xr.Dataset({var_name: masked_da})
+    ds = xr.Dataset({var_name: masked_da}, attrs=ds_attrs)
     ds = ds.isel(index=duplication_indexes)
     ds = ds.rename({"index": "station"})
     ds["station"] = station_names

@@ -42,9 +42,9 @@ def find_valid_subset(sim_da, obs_da, sim_coords, obs_coords, new_coords):
 
 def stat_calc(config):
     sim_config = config["sim"]
-    sim_da, _ = load_da(sim_config, 2)
+    sim_da, _, _ = load_da(sim_config, 2)
     obs_config = config["obs"]
-    obs_da, _ = load_da(obs_config, 2)
+    obs_da, _, _ = load_da(obs_config, 2)
     new_coords = config["output"]["coords"]
     sim_da, obs_da = find_valid_subset(
         sim_da, obs_da, sim_config["coords"], obs_config["coords"], new_coords
