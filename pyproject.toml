@@ -39,15 +39,14 @@ dependencies = [
     documentation = "https://github.com/ecmwf/hyve"
     issues = "https://github.com/ecmwf/hyve/issues"
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+    { include-group="test"},
+    "pre-commit",
+]
 test = [
     "pytest",
     "pytest-cov",
-]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "pre-commit",
 ]
 gribjump = [
     "earthkit-data[gribjump]"
