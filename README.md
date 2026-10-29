@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 European Centre for Medium-Range Weather Forecasts (ECMWF)
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Hyve
 
 <p align="center">
@@ -50,10 +56,39 @@ pre-commit install
 pytest
 ```
 
+### License headers
+
+Every file declares its copyright and license with [SPDX](https://spdx.dev) tags following
+the [REUSE](https://reuse.software) specification, as set out in ECMWF's
+[ADR-010](https://github.com/ecmwf/codex/blob/main/ADR/ADR-010-SPDX-License-Identifiers-and-REUSE-Headers.md).
+Add the header to a new file with:
+
+```
+uvx reuse annotate \
+    --copyright "European Centre for Medium-Range Weather Forecasts (ECMWF)" \
+    --license Apache-2.0 \
+    path/to/new_file.py
+```
+
+which writes, in the file's comment style and with the current year:
+
+```
+# SPDX-FileCopyrightText: 2026 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+```
+
+- `uvx` runs `reuse` without installing it; `pip install reuse` works too.
+- If `reuse` does not recognise the file type, pick a comment style with `--style`, e.g. `--style python`.
+- For a co-developed file, pass `--copyright` once per copyright holder.
+- Files that cannot carry a comment (data, generated files) are covered in [REUSE.toml](REUSE.toml) instead.
+
+The `reuse` pre-commit hook checks that every file is covered; run the same check by hand
+with `uvx reuse lint`.
+
 ## License
 
-See [LICENSE](LICENSE)
+Hyve is licensed under the Apache License, Version 2.0; see [LICENSE](LICENSE) and
+[NOTICE](NOTICE), which also carry ECMWF's intergovernmental notice.
 
-## Copyright
-
-© 2025 ECMWF. All rights reserved.
+© 2025-2026 European Centre for Medium-Range Weather Forecasts (ECMWF).
