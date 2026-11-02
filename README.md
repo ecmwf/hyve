@@ -50,6 +50,24 @@ pre-commit install
 pytest
 ```
 
+## Troubleshooting
+
+### `hyve-crps-stations`: station IDs cannot be matched
+
+`hyve-crps-stations` matches stations between the reanalysis, the reforecast files
+and the (optional) climatology by their IDs. It exits with status 1 and a one-line
+`Error: ...` message on stderr in two cases:
+
+- *Station IDs of different kinds*: one dataset has integer IDs (for example
+  `int64`) and another has text IDs (for example `"1"`) or byte-string IDs. The message names both
+  datasets, their dtypes, station counts and a few sample IDs.
+- *No stations in common*: the datasets use the same kind of ID but no ID appears
+  in both. This includes a climatology that shares no station with the reanalysis.
+
+IDs are never converted, so integer `1` and text `"1"` are different stations.
+To fix it, make the station ID type consistent upstream (in the extraction or
+the dataset that holds the odd ID type) and rerun.
+
 ## License
 
 See [LICENSE](LICENSE)
