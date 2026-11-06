@@ -1,0 +1,15 @@
+version = 1
+
+# Cover the human-facing LICENSE and NOTICE files, which live outside LICENSES/.
+[[annotations]]
+path = ["LICENSE", "NOTICE"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2025-2026 European Centre for Medium-Range Weather Forecasts (ECMWF)"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Cover files that cannot carry a comment: the generated lock file.
+[[annotations]]
+path = ["uv.lock"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 European Centre for Medium-Range Weather Forecasts (ECMWF)"
+SPDX-License-Identifier = "Apache-2.0"
