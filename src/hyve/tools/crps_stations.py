@@ -9,12 +9,90 @@ import datetime
 import glob
 import logging as log
 import os
+import sys
 from os import path
 
 import dask
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+
+class StationMismatchError(ValueError):
+    """Station IDs of two datasets cannot be matched."""
+
+
+def station_id_kind(values):
+    """Kind of a station ID array.
+
+    One of "integer", "text" (str), "bytes", None (empty) or a dtype name.
+    Bytes are never decoded, so they are a kind of their own. Object arrays are
+    classified by the type of their elements.
+    """
+    values = np.asarray(values)
+    if values.size == 0:
+        return None
+    if values.dtype.kind in "iu":
+        return "integer"
+    if values.dtype.kind == "U":
+        return "text"
+    if values.dtype.kind == "S":
+        return "bytes"
+    if values.dtype.kind == "O":
+        if all(isinstance(v, str) for v in values.ravel()):
+            return "text"
+        if all(isinstance(v, bytes) for v in values.ravel()):
+            return "bytes"
+        if all(isinstance(v, (int, np.integer)) for v in values.ravel()):
+            return "integer"
+    return str(values.dtype)
+
+
+def _describe_stations(name, values):
+    values = np.asarray(values)
+    sample = values[:5].tolist()
+    return f"{name} (dtype {values.dtype}, {values.size} stations, e.g. {sample})"
+
+
+def check_same_station_kind(a, b, a_name, b_name):
+    """Raise StationMismatchError if station IDs of `a` and `b` differ in kind.
+
+    IDs are never converted: integer and text IDs are different things.
+    """
+    kind_a, kind_b = station_id_kind(a), station_id_kind(b)
+    if kind_a is not None and kind_b is not None and kind_a != kind_b:
+        raise StationMismatchError(
+            "station IDs of different kinds ({} vs {}) cannot be matched: {} and {}."
+            " Make the station ID types consistent in the input datasets".format(
+                kind_a,
+                kind_b,
+                _describe_stations(a_name, a),
+                _describe_stations(b_name, b),
+            )
+        )
+
+
+def common_stations(a, b, a_name, b_name):
+    """Station IDs present in both `a` and `b`, sorted.
+
+    Raises StationMismatchError if the IDs are of different kinds (integer vs
+    text vs bytes) or if the datasets share no station. IDs are never converted:
+    the comparison uses the Python values of the IDs, so no common dtype is
+    imposed on the two arrays (int64 and uint64 IDs are compared exactly, and
+    bytes never equal str).
+    """
+    a = np.asarray(a)
+    b = np.asarray(b)
+    check_same_station_kind(a, b, a_name, b_name)
+    in_b = set(b.tolist())
+    stations = sorted({station for station in a.tolist() if station in in_b})
+    if not stations:
+        raise StationMismatchError(
+            "no stations in common between {} and {}".format(
+                _describe_stations(a_name, a), _describe_stations(b_name, b)
+            )
+        )
+    return stations
 
 
 def crps_minmax(x, y):
@@ -155,9 +233,12 @@ def compute_score(
 
     reforecast_files = sorted(glob.glob(reforecast_dir + "/*.nc"))[::-1]
     da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
-    set1 = set(da_ref.station.values)
-    set2 = set(ds_reanalysis.station.values)
-    stations = list(set1.intersection(set2))
+    stations = common_stations(
+        da_ref.station.values,
+        ds_reanalysis.station.values,
+        f"reforecast file {os.path.basename(reforecast_files[0])}",
+        "reanalysis",
+    )
     da_ref = da_ref.sel(station=stations)
     da_ref = da_ref["dis"].sel(ensemble=0)
 
@@ -175,9 +256,12 @@ def compute_score(
         log.info("- {}: {}".format(ifile, os.path.basename(reforecast_path)))
         ds_reforecast = xr.open_dataset(os.path.join(reforecast_dir, reforecast_path))
 
-        set1 = set(ds_reforecast.station.values)
-        set2 = set(ds_reanalysis.station.values)
-        stations = list(set1.intersection(set2))
+        stations = common_stations(
+            ds_reforecast.station.values,
+            ds_reanalysis.station.values,
+            f"reforecast file {os.path.basename(reforecast_path)}",
+            "reanalysis",
+        )
         ds_reforecast = ds_reforecast.sel(station=stations)
         ds_reanalysis_local = ds_reanalysis.sel(station=stations)
 
@@ -260,11 +344,11 @@ def compute_score(
     crps_refc_mean = crps_refc_mean / count
     crps_pers_mean = crps_pers_mean / count
 
-    log.debug(crps_refc_mean.isel(station=range(10)))
+    log.debug(crps_refc_mean.isel(station=slice(0, 10)))
     crps_refc_mean = crps_refc_mean.rename("crps")
     crps_refc_mean.to_netcdf(os.path.join(out_dir, "crps_refo.nc"))
 
-    log.debug(crps_pers_mean.isel(station=range(10)))
+    log.debug(crps_pers_mean.isel(station=slice(0, 10)))
     crps_pers_mean = xr.zeros_like(crps_refc_mean) + crps_pers_mean
     crps_pers_mean.name = "crps"
     crps_pers_mean.to_netcdf(os.path.join(out_dir, "crps_pers.nc"))
@@ -272,18 +356,18 @@ def compute_score(
     crpss_pers = 1 - (crps_refc_mean / crps_pers_mean)
     crpss_pers = crpss_pers.rename("crpss")
 
-    log.debug(crpss_pers.isel(station=range(10)))
+    log.debug(crpss_pers.isel(station=slice(0, 10)))
     crpss_pers.to_netcdf(os.path.join(out_dir, "crpss_pers.nc"))
 
     if ds_clim is not None:
         crps_clim_mean = crps_clim_mean / count
-        log.debug(crps_clim_mean.isel(station=range(10)))
+        log.debug(crps_clim_mean.isel(station=slice(0, 10)))
         crps_clim_mean = crps_clim_mean.rename("crps")
         crps_clim_mean.to_netcdf(os.path.join(out_dir, "crps_clim.nc"))
 
         crpss_clim = 1 - (crps_refc_mean / crps_clim_mean)
         crpss_clim = crpss_clim.rename("crpss")
-        log.debug(crpss_clim.isel(station=range(10)))
+        log.debug(crpss_clim.isel(station=slice(0, 10)))
         crpss_clim.to_netcdf(os.path.join(out_dir, "crpss_clim.nc"))
 
 
@@ -320,6 +404,14 @@ def main():
         level=args.log, format="crps - (%(processName)-10s) %(levelname)s: %(message)s"
     )
 
+    try:
+        run(args)
+    except StationMismatchError as err:
+        sys.stderr.write(f"Error: {err}\n")
+        sys.exit(1)
+
+
+def run(args):
     log.info("Computing the scoring using crps approach")
 
     with dask.config.set(scheduler="threads"):
@@ -344,9 +436,12 @@ def main():
         log.info("Reforecast dataset from {}:".format(args.reforecast))
         log.debug(ds_reforecast["dis"])
 
-        set1 = set(ds_reforecast.station.values)
-        set2 = set(ds_reanalysis.station.values)
-        stations = list(set1.intersection(set2))
+        stations = common_stations(
+            ds_reforecast.station.values,
+            ds_reanalysis.station.values,
+            f"reforecast file {os.path.basename(reforecast_files[0])}",
+            "reanalysis",
+        )
         ds_reforecast = ds_reforecast.sel(station=stations)
         ds_reanalysis = ds_reanalysis.sel(station=stations)
         log.debug(ds_reanalysis["dis"])
@@ -357,6 +452,12 @@ def main():
             ds_clim = xr.open_dataarray(args.climatology, chunks={"time": 1})
             if core_dim != "station":
                 ds_clim = ds_clim.rename({core_dim: "station"})
+            common_stations(
+                ds_clim.station.values,
+                ds_reanalysis.station.values,
+                "climatology",
+                "reanalysis",
+            )
             ds_clim = ds_clim.reindex_like(ds_reanalysis.station)
             ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station).sel(
                 issue_hour=0
