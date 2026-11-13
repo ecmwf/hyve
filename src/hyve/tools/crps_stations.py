@@ -24,17 +24,19 @@ class StationMismatchError(ValueError):
 
 
 def station_id_kind(values):
-    """Kind of a station ID array.
+    """Kind of a coordinate (station ID) array.
 
-    One of "integer", "text" (str), "bytes", None (empty) or a dtype name.
-    Bytes are never decoded, so they are a kind of their own. Object arrays are
-    classified by the type of their elements.
+    One of "integer", "float", "text" (str), "bytes", None (empty) or a dtype
+    name. Bytes are never decoded, so they are a kind of their own. Object
+    arrays are classified by the type of their elements.
     """
     values = np.asarray(values)
     if values.size == 0:
         return None
     if values.dtype.kind in "iu":
         return "integer"
+    if values.dtype.kind == "f":
+        return "float"
     if values.dtype.kind == "U":
         return "text"
     if values.dtype.kind == "S":
@@ -49,51 +51,94 @@ def station_id_kind(values):
     return str(values.dtype)
 
 
-def _describe_stations(name, values):
+def _coordinate_words(dim):
+    """Words for the values of `dim` in messages: (plural IDs, count, singular)."""
+    if dim == "station":
+        return "station IDs", "stations", "station ID"
+    return f"{dim} values", f"{dim} values", f"{dim} value"
+
+
+def _describe_stations(name, values, dim="station"):
     values = np.asarray(values)
     sample = values[:5].tolist()
-    return f"{name} (dtype {values.dtype}, {values.size} stations, e.g. {sample})"
+    _, count, _ = _coordinate_words(dim)
+    return f"{name} (dtype {values.dtype}, {values.size} {count}, e.g. {sample})"
 
 
-def check_same_station_kind(a, b, a_name, b_name):
-    """Raise StationMismatchError if station IDs of `a` and `b` differ in kind.
+def check_same_station_kind(a, b, a_name, b_name, dim="station"):
+    """Raise StationMismatchError if coordinates of `a` and `b` differ in kind.
 
-    IDs are never converted: integer and text IDs are different things.
+    Values are never converted: integer and text IDs are different things.
     """
     kind_a, kind_b = station_id_kind(a), station_id_kind(b)
     if kind_a is not None and kind_b is not None and kind_a != kind_b:
+        ids, _, singular = _coordinate_words(dim)
         raise StationMismatchError(
-            "station IDs of different kinds ({} vs {}) cannot be matched: {} and {}."
-            " Make the station ID types consistent in the input datasets".format(
+            "{} of different kinds ({} vs {}) cannot be matched: {} and {}."
+            " Make the {} types consistent in the input datasets".format(
+                ids,
                 kind_a,
                 kind_b,
-                _describe_stations(a_name, a),
-                _describe_stations(b_name, b),
+                _describe_stations(a_name, a, dim),
+                _describe_stations(b_name, b, dim),
+                singular,
             )
         )
 
 
-def common_stations(a, b, a_name, b_name):
-    """Station IDs present in both `a` and `b`, sorted.
+def common_stations(a, b, a_name, b_name, dim="station"):
+    """Coordinate values of `dim` present in both `a` and `b`.
 
-    Raises StationMismatchError if the IDs are of different kinds (integer vs
-    text vs bytes) or if the datasets share no station. IDs are never converted:
-    the comparison uses the Python values of the IDs, so no common dtype is
-    imposed on the two arrays (int64 and uint64 IDs are compared exactly, and
-    bytes never equal str).
+    Station IDs are returned sorted; values of any other dimension keep the
+    order they have in `a`, so a descending latitude axis stays descending.
+
+    Raises StationMismatchError if the values are of different kinds (integer
+    vs float vs text vs bytes) or if the datasets share no value. Values are
+    never converted: the comparison uses their Python values, so no common
+    dtype is imposed on the two arrays (int64 and uint64 IDs are compared
+    exactly, and bytes never equal str).
     """
     a = np.asarray(a)
     b = np.asarray(b)
-    check_same_station_kind(a, b, a_name, b_name)
+    check_same_station_kind(a, b, a_name, b_name, dim)
     in_b = set(b.tolist())
-    stations = sorted({station for station in a.tolist() if station in in_b})
-    if not stations:
+    if dim == "station":
+        shared = sorted({value for value in a.tolist() if value in in_b})
+    else:
+        shared = [value for value in a.tolist() if value in in_b]
+    if not shared:
+        _, count, _ = _coordinate_words(dim)
         raise StationMismatchError(
-            "no stations in common between {} and {}".format(
-                _describe_stations(a_name, a), _describe_stations(b_name, b)
+            "no {} in common between {} and {}".format(
+                count,
+                _describe_stations(a_name, a, dim),
+                _describe_stations(b_name, b, dim),
             )
         )
-    return stations
+    return shared
+
+
+def common_coords(a, b, spatial_dims, a_name, b_name):
+    """Values of each spatial dimension present in both `a` and `b`.
+
+    Returns a mapping of dimension name to shared values, ready for ``.sel``.
+    Raises StationMismatchError if a spatial dimension is missing from either
+    dataset or if the datasets share no value along a dimension.
+    """
+    for obj, name in ((a, a_name), (b, b_name)):
+        missing = [dim for dim in spatial_dims if dim not in obj.dims]
+        if missing:
+            raise StationMismatchError(
+                "{} has no {} dimension (its dimensions are {}). Set"
+                " --spatial_dims to the spatial dimensions of the input"
+                " datasets".format(
+                    name, ", ".join(repr(d) for d in missing), list(obj.dims)
+                )
+            )
+    return {
+        dim: common_stations(a[dim].values, b[dim].values, a_name, b_name, dim)
+        for dim in spatial_dims
+    }
 
 
 def crps_masked(x, y):
@@ -174,21 +219,23 @@ def coord_doy(
 
 
 def compute_score(
-    out_dir, reforecast_dir, ds_reanalysis, ds_clim, core_dims, with_init=False
+    out_dir, reforecast_dir, ds_reanalysis, ds_clim, spatial_dims, with_init=False
 ):
 
     log.info("\nComputing crps and crpss\n")
+    spatial_dims = list(spatial_dims)
 
-    reforecast_files = sorted(glob.glob(reforecast_dir + "/*.nc"))[::-1]
-    da_ref = xr.open_dataset(os.path.join(reforecast_dir, reforecast_files[0]))
-    stations = common_stations(
-        da_ref.station.values,
-        ds_reanalysis.station.values,
+    reforecast_files = sorted(glob.glob(os.path.join(reforecast_dir, "*.nc")))[::-1]
+    da_ref = xr.open_dataset(reforecast_files[0])
+    common = common_coords(
+        da_ref,
+        ds_reanalysis,
+        spatial_dims,
         f"reforecast file {os.path.basename(reforecast_files[0])}",
         "reanalysis",
     )
-    da_ref = da_ref.sel(station=stations)
-    da_ref = da_ref["dis"].sel(ensemble=0)
+    da_ref = da_ref.sel(common)
+    da_ref = da_ref["dis"].sel(ensemble=0).transpose("time", *spatial_dims)
 
     crps_refc_mean = xr.DataArray(np.zeros(da_ref.shape), dims=da_ref.dims)
     crps_pers_mean = xr.DataArray(np.zeros(da_ref.shape), dims=da_ref.dims)
@@ -202,16 +249,17 @@ def compute_score(
     for ifile, reforecast_path in enumerate(reforecast_files):
 
         log.info("- {}: {}".format(ifile, os.path.basename(reforecast_path)))
-        ds_reforecast = xr.open_dataset(os.path.join(reforecast_dir, reforecast_path))
+        ds_reforecast = xr.open_dataset(reforecast_path)
 
-        stations = common_stations(
-            ds_reforecast.station.values,
-            ds_reanalysis.station.values,
+        common = common_coords(
+            ds_reforecast,
+            ds_reanalysis,
+            spatial_dims,
             f"reforecast file {os.path.basename(reforecast_path)}",
             "reanalysis",
         )
-        ds_reforecast = ds_reforecast.sel(station=stations)
-        ds_reanalysis_local = ds_reanalysis.sel(station=stations)
+        ds_reforecast = ds_reforecast.sel(common)
+        ds_reanalysis_local = ds_reanalysis.sel(common).transpose("time", *spatial_dims)
 
         date_range = ds_reforecast.time
         step = (date_range.values[1] - date_range.values[0]).astype(
@@ -227,19 +275,19 @@ def compute_score(
         log.info(f"Persistence date is {date_persistence:%Y-%m-%d %H}h")
 
         reforecast = ds_reforecast["dis"].sel(time=date_range)
-        reforecast = reforecast.transpose("time", "ensemble", *core_dims)
+        reforecast = reforecast.transpose("time", "ensemble", *spatial_dims)
+        # points the reforecast has data for; others are never scored
+        scored = reforecast.isel(time=0, ensemble=0, drop=True).notnull()
 
         # extract arrays of interest
         reanalysis = ds_reanalysis_local.reindex(time=date_range.values)
-        if reanalysis.isnull().any():
+        gaps = reanalysis.isnull() & scored
+        if gaps.any():
             msg = f"Gaps in the reanalysis data for base date {base_date:%Y-%m-%d %H}h. Skipping"
-            if reanalysis.isnull().any(dim="time").all():
-                (missing_steps,) = np.where(reanalysis.isel(station=0).isnull().values)
-                missing_steps = (
-                    np.array([np.timedelta64(step, "h") for step in missing_steps])
-                    + base_date
-                )
-                msg += f"\n Gaps in all stations for step(s) {missing_steps.tolist()}"
+            all_missing = (reanalysis.isnull() | ~scored).all(dim=spatial_dims)
+            if all_missing.any():
+                missing_steps = date_range.values[all_missing.values]
+                msg += f"\n Gaps at all points for step(s) {missing_steps.tolist()}"
             log.info(msg)
             continue
         persistence = ds_reanalysis_local.reindex(time=[date_persistence])
@@ -250,7 +298,7 @@ def compute_score(
             continue
 
         crps_pers = persistence_crps(reanalysis.values, persistence.values)
-        crps_refo = forecast_crps(reforecast, reanalysis, core_dims=core_dims)
+        crps_refo = forecast_crps(reforecast, reanalysis, core_dims=spatial_dims)
         if ds_clim is not None:
             log.debug(coord_doy(date_range))
             climatology = (
@@ -258,7 +306,7 @@ def compute_score(
                 .assign_coords(doy=date_range.values)
                 .rename(doy="time")
             )
-            crps_clim = forecast_crps(climatology, reanalysis, core_dims=core_dims)
+            crps_clim = forecast_crps(climatology, reanalysis, core_dims=spatial_dims)
             crps_refo, crps_pers, crps_clim = dask.compute(
                 crps_refo, crps_pers, crps_clim
             )
@@ -266,7 +314,7 @@ def compute_score(
             crps_refo, crps_pers = dask.compute(crps_refo, crps_pers)
 
         # write forecast files
-        crps_refo = crps_refo.rename("crps")
+        crps_refo = crps_refo.transpose("time", *spatial_dims).rename("crps")
         refo_file = path.join(out_dir, "crps_refo_{:%Y%m%d}.nc".format(base_date))
         crps_refo.to_netcdf(refo_file)
         pers_out = xr.zeros_like(crps_refo) + crps_pers
@@ -274,7 +322,7 @@ def compute_score(
         pers_file = path.join(out_dir, "crps_pers_{:%Y%m%d}.nc".format(base_date))
         pers_out.to_netcdf(pers_file)
         if ds_clim is not None:
-            crps_clim = crps_clim.rename("crps")
+            crps_clim = crps_clim.transpose("time", *spatial_dims).rename("crps")
             clim_file = path.join(out_dir, "crps_clim_{:%Y%m%d}.nc".format(base_date))
             crps_clim.to_netcdf(clim_file)
 
@@ -292,11 +340,11 @@ def compute_score(
     crps_refc_mean = crps_refc_mean / count
     crps_pers_mean = crps_pers_mean / count
 
-    log.debug(crps_refc_mean.isel(station=slice(0, 10)))
+    log.debug(crps_refc_mean)
     crps_refc_mean = crps_refc_mean.rename("crps")
     crps_refc_mean.to_netcdf(os.path.join(out_dir, "crps_refo.nc"))
 
-    log.debug(crps_pers_mean.isel(station=slice(0, 10)))
+    log.debug(crps_pers_mean)
     crps_pers_mean = xr.zeros_like(crps_refc_mean) + crps_pers_mean
     crps_pers_mean.name = "crps"
     crps_pers_mean.to_netcdf(os.path.join(out_dir, "crps_pers.nc"))
@@ -304,18 +352,18 @@ def compute_score(
     crpss_pers = 1 - (crps_refc_mean / crps_pers_mean)
     crpss_pers = crpss_pers.rename("crpss")
 
-    log.debug(crpss_pers.isel(station=slice(0, 10)))
+    log.debug(crpss_pers)
     crpss_pers.to_netcdf(os.path.join(out_dir, "crpss_pers.nc"))
 
     if ds_clim is not None:
         crps_clim_mean = crps_clim_mean / count
-        log.debug(crps_clim_mean.isel(station=slice(0, 10)))
+        log.debug(crps_clim_mean)
         crps_clim_mean = crps_clim_mean.rename("crps")
         crps_clim_mean.to_netcdf(os.path.join(out_dir, "crps_clim.nc"))
 
         crpss_clim = 1 - (crps_refc_mean / crps_clim_mean)
         crpss_clim = crpss_clim.rename("crpss")
-        log.debug(crpss_clim.isel(station=slice(0, 10)))
+        log.debug(crpss_clim)
         crpss_clim.to_netcdf(os.path.join(out_dir, "crpss_clim.nc"))
 
 
@@ -328,7 +376,20 @@ def main():
     parser.add_argument(
         "--output", help="output folder for individual crps values", default="."
     )
-    parser.add_argument("--core_dim", default="station", help="name of core dimension")
+    parser.add_argument(
+        "--spatial_dims",
+        nargs="+",
+        default=None,
+        help=(
+            "spatial dimensions of the input datasets, for example 'station',"
+            " 'lat lon' or 'y x' (default: station)"
+        ),
+    )
+    parser.add_argument(
+        "--core_dim",
+        default=None,
+        help="single spatial dimension; same as --spatial_dims with one name",
+    )
     parser.add_argument(
         "--with_init",
         action="store_true",
@@ -348,6 +409,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.spatial_dims is not None and args.core_dim is not None:
+        parser.error("use either --spatial_dims or --core_dim, not both")
     log.basicConfig(
         level=args.log, format="crps - (%(processName)-10s) %(levelname)s: %(message)s"
     )
@@ -359,13 +422,22 @@ def main():
         sys.exit(1)
 
 
+def spatial_dims_from_args(args):
+    """Spatial dimensions requested on the command line, station by default."""
+    if getattr(args, "spatial_dims", None):
+        return list(args.spatial_dims)
+    if getattr(args, "core_dim", None):
+        return [args.core_dim]
+    return ["station"]
+
+
 def run(args):
     log.info("Computing the scoring using crps approach")
 
     with dask.config.set(scheduler="threads"):
 
-        core_dim = args.core_dim
-        core_dims = ["station"]
+        spatial_dims = spatial_dims_from_args(args)
+        log.info(f"Spatial dimensions: {spatial_dims}")
 
         # read reanalysis dataset
         ds_reanalysis = xr.open_dataset(args.reanalysis)
@@ -376,40 +448,32 @@ def run(args):
         log.debug(reforecast_files)
         ds_reforecast = xr.open_dataset(reforecast_files[0])
 
-        ds_reforecast = ds_reforecast.rename({core_dim: "station"})
-        ds_reanalysis = ds_reanalysis.rename({core_dim: "station"})
-
         log.info("Reanalysis dataset from {}:".format(args.reanalysis))
         log.debug(ds_reanalysis["dis"])
         log.info("Reforecast dataset from {}:".format(args.reforecast))
         log.debug(ds_reforecast["dis"])
 
-        stations = common_stations(
-            ds_reforecast.station.values,
-            ds_reanalysis.station.values,
+        common = common_coords(
+            ds_reforecast,
+            ds_reanalysis,
+            spatial_dims,
             f"reforecast file {os.path.basename(reforecast_files[0])}",
             "reanalysis",
         )
-        ds_reforecast = ds_reforecast.sel(station=stations)
-        ds_reanalysis = ds_reanalysis.sel(station=stations)
+        ds_reforecast = ds_reforecast.sel(common)
+        ds_reanalysis = ds_reanalysis.sel(common)
         log.debug(ds_reanalysis["dis"])
         log.debug(ds_reforecast["dis"])
 
         ds_clim = None
         if args.climatology:
             ds_clim = xr.open_dataarray(args.climatology, chunks={"time": 1})
-            if core_dim != "station":
-                ds_clim = ds_clim.rename({core_dim: "station"})
-            common_stations(
-                ds_clim.station.values,
-                ds_reanalysis.station.values,
-                "climatology",
-                "reanalysis",
+            common_coords(
+                ds_clim, ds_reanalysis, spatial_dims, "climatology", "reanalysis"
             )
-            ds_clim = ds_clim.reindex_like(ds_reanalysis.station)
-            ds_clim = ds_clim.assign_coords(station=ds_reanalysis.station).sel(
-                issue_hour=0
-            )
+            ds_clim = ds_clim.reindex(
+                {dim: ds_reanalysis[dim].values for dim in spatial_dims}
+            ).sel(issue_hour=0)
             log.debug(ds_clim)
 
         if args.output:
@@ -420,7 +484,7 @@ def run(args):
             args.reforecast,
             ds_reanalysis["dis"],
             ds_clim,
-            core_dims,
+            spatial_dims,
             args.with_init,
         )
 
