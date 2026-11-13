@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
@@ -648,6 +648,21 @@ gribjump = [
 ]
 
 [[package]]
+name = "earthkit-meteo"
+version = "0.6.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "earthkit-utils" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/87/162771cba3c4371e054914750164851e32bafe924c674153105789f01c88/earthkit_meteo-0.6.2.tar.gz", hash = "sha256:2823ed56947dd2c9c69aae6fe19153eec393c80392126ab84cc760419d0b952b", size = 370304, upload-time = "2026-03-31T09:40:37.609Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/d3/988c1807b315a71cb4f6e5b2b739b115246083dc678b50fa9ff97c8a417a/earthkit_meteo-0.6.2-py3-none-any.whl", hash = "sha256:7380464a3a62422d4027bcfc20fbd4ee3a7bfc51eb1f89d1a5027f24c7f32a4d", size = 57004, upload-time = "2026-03-31T09:40:36.633Z" },
+]
+
+[[package]]
 name = "earthkit-utils"
 version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -759,6 +774,7 @@ name = "hydro-verification"
 source = { editable = "." }
 dependencies = [
     { name = "earthkit-data" },
+    { name = "earthkit-meteo" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -786,6 +802,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "earthkit-data", specifier = "~=0.20" },
+    { name = "earthkit-meteo", specifier = ">=0.6,<1" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pydantic", specifier = ">=2" },
@@ -1106,6 +1123,10 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/76/7bc801796dee752c1ce9cd6935564a6ee79d5c9d9ef9192f57b156495a35/netcdf4-1.7.3.tar.gz", hash = "sha256:83f122fc3415e92b1d4904fd6a0898468b5404c09432c34beb6b16c533884673", size = 836095, upload-time = "2025-10-13T18:38:00.76Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/57/c233d8dcf6efe0add48bb1d8d6fe32d7ad547d5c0d84bf0cbe7e5d82147b/netcdf4-1.7.3-cp310-cp310-win_amd64.whl", hash = "sha256:6ab71f5d70e55e8584d168d5158efdb2fd8d350a033d0c27d942c3d399587f54", size = 7214638, upload-time = "2025-10-13T18:37:51.627Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/f8/a5509bc46faedae2b71df29c57e6525b7eb47aee44000fd43e2927a9a3a9/netcdf4-1.7.3-cp311-abi3-win_amd64.whl", hash = "sha256:1b6c646fa179fb1e5e8d6e8231bc78cc0311eceaa1241256b5a853f1d04055b9", size = 7149328, upload-time = "2025-10-13T18:37:59.242Z" },
+]
 
 [[package]]
 name = "netcdf4"

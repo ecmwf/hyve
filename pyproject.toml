@@ -36,6 +36,7 @@ dependencies = [
     "pydantic>=2",
     "xarray",
     "earthkit-data~=0.20",
+    "earthkit-meteo>=0.6,<1",
 ]
 
 [project.urls]
