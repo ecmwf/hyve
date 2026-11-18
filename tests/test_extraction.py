@@ -952,7 +952,10 @@ def test_coord_tolerance_can_be_disabled(dummy_grid_data, tmp_path):
             "coords": {"x": "lat", "y": "lon", "tolerance": None},
         },
         "grid": {
-            "source": {"list-of-dicts": {"list_of_dicts": dummy_grid_data}},
+            "source": {
+                "name": "list-of-dicts",
+                "options": {"list_of_dicts": dummy_grid_data},
+            },
             "coords": {"x": "latitude", "y": "longitude"},
         },
     }
