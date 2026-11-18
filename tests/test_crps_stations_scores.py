@@ -30,7 +30,6 @@ from dask.delayed import Delayed
 
 from hyve.tools import crps_stations
 from hyve.tools.crps_stations import (
-    StationMismatchError,
     coord_doy,
     crps_masked,
     forecast_crps,
@@ -322,12 +321,7 @@ def test_coord_doy_from_datetimeindex_raises_current_behaviour():
 
 
 class Inputs:
-    """Synthetic inputs written to disk, kept in memory for expectations.
-
-    ``spatial`` maps each spatial dimension to its coordinate values. The same
-    random numbers are drawn for any layout with the same number of points, so
-    a 2 x 2 grid holds the values of four stations in row-major order.
-    """
+    """Synthetic inputs written to disk, kept in memory for expectations."""
 
     def __init__(
         self,
@@ -337,40 +331,29 @@ class Inputs:
         forecast_dates=FORECAST_DATES,
         reanalysis_start=REANALYSIS_START,
         with_climatology=True,
-        spatial=None,
-        reversed_dims_on_disk=False,
     ):
-        if spatial is None:
-            spatial = {dim: STATIONS}
-        self.spatial = {name: list(values) for name, values in spatial.items()}
-        self.spatial_dims = list(self.spatial)
-        shape = tuple(len(values) for values in self.spatial.values())
-        n_points = int(np.prod(shape))
-        self.reversed_dims_on_disk = reversed_dims_on_disk
-
         rng = np.random.default_rng(40)
         self.root = root
         self.freq = freq
         step = pd.Timedelta(1, "D") if freq == "D" else pd.Timedelta(freq)
         time = pd.date_range(reanalysis_start, periods=REANALYSIS_DAYS, freq=freq)
         self.reanalysis = xr.DataArray(
-            rng.uniform(1, 10, size=(len(time), n_points)).reshape(len(time), *shape),
-            dims=("time", *self.spatial_dims),
-            coords={"time": time, **self.spatial},
+            rng.uniform(1, 10, size=(len(time), len(STATIONS))),
+            dims=("time", dim),
+            coords={"time": time, dim: STATIONS},
             name="dis",
         )
 
         self.reforecasts = {}
         for date in forecast_dates:
             ftime = pd.date_range(date, periods=N_STEPS, freq=step)
-            values = rng.uniform(1, 10, size=(N_ENSEMBLE, N_STEPS, n_points))
             self.reforecasts[pd.Timestamp(date)] = xr.DataArray(
-                values.reshape(N_ENSEMBLE, N_STEPS, *shape),
-                dims=("ensemble", "time", *self.spatial_dims),
+                rng.uniform(1, 10, size=(N_ENSEMBLE, N_STEPS, len(STATIONS))),
+                dims=("ensemble", "time", dim),
                 coords={
                     "ensemble": np.arange(N_ENSEMBLE),
                     "time": ftime,
-                    **self.spatial,
+                    dim: STATIONS,
                 },
                 name="dis",
             )
@@ -378,35 +361,29 @@ class Inputs:
         self.climatology = None
         if with_climatology:
             doy = np.arange(1, 367)
-            values = rng.uniform(1, 10, size=(N_ENSEMBLE, len(doy), 2, n_points))
             self.climatology = xr.DataArray(
-                values.reshape(N_ENSEMBLE, len(doy), 2, *shape),
-                dims=("ensemble", "doy", "issue_hour", *self.spatial_dims),
+                rng.uniform(1, 10, size=(N_ENSEMBLE, len(doy), 2, len(STATIONS))),
+                dims=("ensemble", "doy", "issue_hour", dim),
                 coords={
                     "ensemble": np.arange(N_ENSEMBLE),
                     "doy": doy,
                     "issue_hour": [0, 12],
-                    **self.spatial,
+                    dim: STATIONS,
                 },
                 name="dis",
             )
         self.step = step
 
-    def _on_disk(self, da):
-        if self.reversed_dims_on_disk:
-            return da.transpose(*reversed(da.dims))
-        return da
-
     def write(self):
         self.root.mkdir(exist_ok=True)
-        self._on_disk(self.reanalysis).to_dataset().to_netcdf(self.reanalysis_path)
+        self.reanalysis.to_dataset().to_netcdf(self.reanalysis_path)
         self.reforecast_dir.mkdir()
         for date, da in self.reforecasts.items():
-            self._on_disk(da).to_dataset().to_netcdf(
+            da.to_dataset().to_netcdf(
                 self.reforecast_dir / f"reforecast_{date:%Y%m%d%H}.nc"
             )
         if self.climatology is not None:
-            self._on_disk(self.climatology).to_netcdf(self.climatology_path)
+            self.climatology.to_netcdf(self.climatology_path)
         return self
 
     @property
@@ -425,34 +402,27 @@ class Inputs:
     def output(self):
         return self.root / "out"
 
-    @property
-    def spatial_args(self):
-        return ["--spatial_dims", *self.spatial_dims]
-
-    # expectations: arrays shaped (time, *spatial_dims) --------------------------
+    # expectations -----------------------------------------------------------
 
     def observed(self, date):
-        obs = self.reanalysis.sel(time=self.reforecasts[date].time)
-        return obs.transpose("time", *self.spatial_dims).values
+        return self.reanalysis.sel(time=self.reforecasts[date].time).values
 
     def expected_refo(self, date):
-        fc = self.reforecasts[date].transpose("time", "ensemble", *self.spatial_dims)
-        fc = fc.values
+        fc = self.reforecasts[date].transpose("time", "ensemble", ...).values
         obs = self.observed(date)
         return np.stack([reference_crps(fc[i], obs[i]) for i in range(N_STEPS)])
 
     def expected_pers(self, date, with_init=False):
         persistence_date = date if with_init else date - self.step
-        persistence = self.reanalysis.sel(time=persistence_date)
-        persistence = persistence.transpose(*self.spatial_dims).values
-        return np.abs(self.observed(date) - persistence[None, ...])
+        persistence = self.reanalysis.sel(time=persistence_date).values
+        return np.abs(self.observed(date) - persistence[None, :])
 
     def expected_clim(self, date):
         time = self.reforecasts[date].time
         clim = (
             self.climatology.sel(issue_hour=0)
             .sel(doy=time.dt.dayofyear.values)
-            .transpose("doy", "ensemble", *self.spatial_dims)
+            .transpose("doy", "ensemble", ...)
             .values
         )
         obs = self.observed(date)
@@ -678,223 +648,7 @@ def test_cli_station_missing_in_reforecast_current_behaviour(monkeypatch, tmp_pa
     assert not refo.sel(station=others).isnull().any()
 
 
-def test_cli_core_dim_names_a_single_spatial_dimension(monkeypatch, tmp_path):
-    inputs = Inputs(tmp_path / "case", dim="id").write()
-    out = run_cli(monkeypatch, inputs, "--core_dim", "id")
-    date = pd.Timestamp(FORECAST_DATES[0])
-    crps = open_crps(out / f"crps_refo_{date:%Y%m%d}.nc")["crps"]
-    assert crps.dims == ("time", "id")
-    assert crps.values == pytest.approx(inputs.expected_refo(date))
-
-
-def test_cli_spatial_dims_and_core_dim_together_is_an_error(monkeypatch, tmp_path):
-    inputs = Inputs(tmp_path / "case").write()
-    with pytest.raises(SystemExit) as excinfo:
-        run_cli(monkeypatch, inputs, "--spatial_dims", "station", "--core_dim", "id")
-    assert excinfo.value.code == 2
-
-
-# ---------------------------------------------------------------------------
-# Spatial dimensions
-# ---------------------------------------------------------------------------
-
-LAYOUTS = {
-    "station": {"station": STATIONS},
-    "lat_lon": {"lat": [50.0, 49.5, 49.0], "lon": [5.0, 5.5]},
-    "y_x": {"y": [0, 1], "x": [100, 200, 300]},
-}
-
-
-@pytest.fixture(params=list(LAYOUTS))
-def layout(request):
-    return LAYOUTS[request.param]
-
-
-def test_common_coords_per_dimension_keeps_grid_order():
-    a = xr.Dataset(coords={"lat": [50.0, 49.5, 49.0], "lon": [5.0, 5.5, 6.0]})
-    b = xr.Dataset(coords={"lat": [49.0, 49.5], "lon": [6.0, 5.5, 5.0, 4.5]})
-    common = crps_stations.common_coords(a, b, ["lat", "lon"], "a", "b")
-    assert common == {"lat": [49.5, 49.0], "lon": [5.0, 5.5, 6.0]}
-
-
-def test_common_coords_stations_are_sorted():
-    a = xr.Dataset(coords={"station": [4, 1, 3]})
-    b = xr.Dataset(coords={"station": [3, 4, 5]})
-    assert crps_stations.common_coords(a, b, ["station"], "a", "b") == {
-        "station": [3, 4]
-    }
-
-
-def test_common_coords_float32_and_float64_are_the_same_kind():
-    a = xr.Dataset(coords={"lat": np.array([50.0, 49.5], dtype="float32")})
-    b = xr.Dataset(coords={"lat": np.array([49.5, 49.0], dtype="float64")})
-    assert crps_stations.common_coords(a, b, ["lat"], "a", "b") == {"lat": [49.5]}
-
-
-def test_common_coords_disjoint_grid_names_the_dimension():
-    a = xr.Dataset(coords={"lat": [50.0, 49.5], "lon": [5.0]})
-    b = xr.Dataset(coords={"lat": [50.0], "lon": [7.0, 8.0]})
-    with pytest.raises(StationMismatchError) as excinfo:
-        crps_stations.common_coords(a, b, ["lat", "lon"], "forecast", "reanalysis")
-    message = str(excinfo.value)
-    assert message.startswith("no lon values in common")
-    assert "forecast" in message and "reanalysis" in message
-    assert "1 lon values" in message and "2 lon values" in message
-
-
-def test_common_coords_text_vs_float_grid_raises():
-    a = xr.Dataset(coords={"x": [1.0, 2.0]})
-    b = xr.Dataset(coords={"x": ["1", "2"]})
-    with pytest.raises(StationMismatchError, match="x values of different kinds"):
-        crps_stations.common_coords(a, b, ["x"], "a", "b")
-
-
-def test_common_coords_missing_dimension_raises():
-    a = xr.Dataset(coords={"lat": [50.0], "lon": [5.0]})
-    b = xr.Dataset(coords={"station": [1]})
-    with pytest.raises(StationMismatchError, match="b has no 'lat', 'lon' dimension"):
-        crps_stations.common_coords(a, b, ["lat", "lon"], "a", "b")
-
-
-def test_cli_scores_for_each_spatial_layout(monkeypatch, tmp_path, layout):
-    inputs = Inputs(tmp_path / "case", spatial=layout).write()
-    out = run_cli(monkeypatch, inputs, *inputs.spatial_args)
-    dims = ("time", *inputs.spatial_dims)
-    dates = list(inputs.reforecasts)
-    expected = {
-        "refo": {d: inputs.expected_refo(d) for d in dates},
-        "pers": {d: inputs.expected_pers(d) for d in dates},
-        "clim": {d: inputs.expected_clim(d) for d in dates},
-    }
-    for kind, by_date in expected.items():
-        for date, values in by_date.items():
-            crps = open_crps(out / f"crps_{kind}_{date:%Y%m%d}.nc")["crps"]
-            assert crps.dims == dims
-            for dim, coords in inputs.spatial.items():
-                np.testing.assert_array_equal(crps[dim], coords)
-            assert crps.values == pytest.approx(values)
-        mean = open_crps(out / f"crps_{kind}.nc")["crps"]
-        assert mean.dims == dims
-        assert mean.values == pytest.approx(np.mean(list(by_date.values()), axis=0))
-    refo = open_crps(out / "crps_refo.nc")["crps"]
-    for benchmark in ("pers", "clim"):
-        ref = open_crps(out / f"crps_{benchmark}.nc")["crps"]
-        crpss = open_crps(out / f"crpss_{benchmark}.nc")["crpss"]
-        assert crpss.dims == dims
-        assert crpss.values == pytest.approx((1 - refo / ref).values)
-
-
-def test_cli_with_init_for_each_spatial_layout(monkeypatch, tmp_path, layout):
-    inputs = Inputs(tmp_path / "case", spatial=layout).write()
-    out = run_cli(monkeypatch, inputs, *inputs.spatial_args, "--with_init")
-    for date in inputs.reforecasts:
-        crps = open_crps(out / f"crps_pers_{date:%Y%m%d}.nc")["crps"]
-        assert crps.values == pytest.approx(inputs.expected_pers(date, True))
-
-
-@pytest.mark.parametrize("name", ["lat_lon", "y_x"])
-def test_cli_grid_scores_equal_station_scores(monkeypatch, tmp_path, name):
-    grid = {"lat_lon": {"lat": [50.0, 49.5], "lon": [5.0, 5.5]}}.get(
-        name, {"y": [0, 1], "x": [100, 200]}
-    )
-    stations = Inputs(tmp_path / "stations").write()
-    gridded = Inputs(tmp_path / "grid", spatial=grid).write()
-    out_s = run_cli(monkeypatch, stations)
-    out_g = run_cli(monkeypatch, gridded, *gridded.spatial_args)
-    for file in sorted(os.listdir(out_s)):
-        s = open_crps(out_s / file)
-        g = open_crps(out_g / file)
-        var = list(s.data_vars)[0]
-        assert g[var].values.reshape(s[var].shape) == pytest.approx(s[var].values)
-
-
-def test_cli_dimension_order_on_disk_does_not_change_scores(monkeypatch, tmp_path):
-    layout = LAYOUTS["lat_lon"]
-    plain = Inputs(tmp_path / "plain", spatial=layout).write()
-    flipped = Inputs(
-        tmp_path / "flipped", spatial=layout, reversed_dims_on_disk=True
-    ).write()
-    out_p = run_cli(monkeypatch, plain, *plain.spatial_args)
-    out_f = run_cli(monkeypatch, flipped, *flipped.spatial_args)
-    assert sorted(os.listdir(out_p)) == sorted(os.listdir(out_f))
-    for file in os.listdir(out_p):
-        p = open_crps(out_p / file)
-        f = open_crps(out_f / file)
-        var = list(p.data_vars)[0]
-        assert f[var].dims == p[var].dims == ("time", "lat", "lon")
-        assert f[var].values == pytest.approx(p[var].values)
-
-
-def test_cli_grid_scores_only_overlapping_cells(monkeypatch, tmp_path):
-    inputs = Inputs(tmp_path / "case", spatial=LAYOUTS["lat_lon"])
-    # the reanalysis covers a larger grid than the reforecast
-    larger = inputs.reanalysis.reindex(
-        lat=[51.0, 50.0, 49.5, 49.0], lon=[4.5, 5.0, 5.5], fill_value=3.0
-    )
-    inputs.reanalysis = larger
-    inputs.write()
-    out = run_cli(monkeypatch, inputs, *inputs.spatial_args)
-    date = pd.Timestamp(FORECAST_DATES[0])
-    crps = open_crps(out / f"crps_refo_{date:%Y%m%d}.nc")["crps"]
-    np.testing.assert_array_equal(crps.lat, [50.0, 49.5, 49.0])
-    np.testing.assert_array_equal(crps.lon, [5.0, 5.5])
-    inputs.reanalysis = larger.sel(lat=[50.0, 49.5, 49.0], lon=[5.0, 5.5])
-    assert crps.values == pytest.approx(inputs.expected_refo(date))
-
-
-def test_cli_disjoint_grid_exits_1(monkeypatch, tmp_path, capsys):
-    inputs = Inputs(tmp_path / "case", spatial=LAYOUTS["lat_lon"])
-    inputs.reanalysis = inputs.reanalysis.assign_coords(lon=[15.0, 15.5])
-    inputs.write()
-    with pytest.raises(SystemExit) as excinfo:
-        run_cli(monkeypatch, inputs, *inputs.spatial_args)
-    assert excinfo.value.code == 1
-    err = capsys.readouterr().err
-    assert err.startswith("Error: no lon values in common")
-    assert "reanalysis" in err
-    assert "Traceback" not in err
-
-
-def test_cli_spatial_dims_not_in_inputs_exits_1(monkeypatch, tmp_path, capsys):
-    inputs = Inputs(tmp_path / "case", spatial=LAYOUTS["lat_lon"]).write()
-    with pytest.raises(SystemExit) as excinfo:
-        run_cli(monkeypatch, inputs)  # default spatial dimension is station
-    assert excinfo.value.code == 1
-    err = capsys.readouterr().err
-    assert "has no 'station' dimension" in err
-    assert "--spatial_dims" in err
-
-
-def test_cli_cells_without_forecast_data_are_not_reanalysis_gaps(monkeypatch, tmp_path):
-    # a land/sea style mask: one cell is NaN in every reforecast and in the
-    # reanalysis, and must not cause dates to be skipped
-    inputs = Inputs(tmp_path / "case", spatial=LAYOUTS["lat_lon"])
-    cell = {"lat": 49.5, "lon": 5.5}
-    inputs.reanalysis = inputs.reanalysis.copy()
-    inputs.reanalysis.loc[cell] = np.nan
-    for date, da in inputs.reforecasts.items():
-        da = da.copy()
-        da.loc[cell] = np.nan
-        inputs.reforecasts[date] = da
-    inputs.write()
-    out = run_cli(monkeypatch, inputs, *inputs.spatial_args)
-    for date in inputs.reforecasts:
-        crps = open_crps(out / f"crps_refo_{date:%Y%m%d}.nc")["crps"]
-        assert crps.sel(cell).isnull().all()
-        assert int(crps.isnull().sum()) == N_STEPS
-        expected = inputs.expected_refo(date)  # NaN at the masked cell
-        assert crps.values == pytest.approx(expected, nan_ok=True)
-
-
-def test_cli_grid_reanalysis_gap_at_scored_cell_skips_date(monkeypatch, tmp_path):
-    inputs = Inputs(tmp_path / "case", spatial=LAYOUTS["y_x"])
-    # 2020-03-03 is only inside the window of the last forecast date
-    inputs.reanalysis = inputs.reanalysis.copy()
-    inputs.reanalysis.loc[{"time": "2020-03-03", "y": 1, "x": 200}] = np.nan
-    inputs.write()
-    out = run_cli(monkeypatch, inputs, *inputs.spatial_args)
-    assert not (out / "crps_refo_20200229.nc").exists()
-    kept = [pd.Timestamp(d) for d in FORECAST_DATES[:2]]
-    mean = open_crps(out / "crps_refo.nc")["crps"]
-    expected = np.mean([inputs.expected_refo(d) for d in kept], axis=0)
-    assert mean.values == pytest.approx(expected)
+def test_cli_core_dim_other_than_station_fails_current_behaviour(monkeypatch, tmp_path):
+    inputs = Inputs(tmp_path / "case", dim="id", with_climatology=False).write()
+    with pytest.raises(AttributeError):
+        run_cli(monkeypatch, inputs, "--core_dim", "id")
