@@ -141,32 +141,53 @@ def common_coords(a, b, spatial_dims, a_name, b_name):
     }
 
 
-def crps_masked(x, y):
-    n_steps = x.shape[0]
+def _crps_over_last_axis(x, y):
+    """earthkit-meteo CRPS for an ensemble held on the last axis of `x`.
 
-    mask = np.logical_not(np.isnan(x[0, 0]))
-    crps = np.ones(y.shape) * np.nan
-    for i in range(n_steps):
-        xi = x[i]
-        yi = y[i]
-        crps_masked = ensemble_crps(xi[:, mask], yi[mask], nan_policy="propagate")
-        crps[i][mask] = crps_masked
-
-    return crps
+    `y` is broadcast against the non-ensemble axes of `x`, so any number of
+    leading (time, spatial or other) axes is supported.
+    """
+    x = np.moveaxis(np.asarray(x), -1, 0)
+    y = np.broadcast_to(np.asarray(y), x.shape[1:])
+    return ensemble_crps(x, y, nan_policy="propagate")
 
 
-def forecast_crps(x, y, core_dims=["lat", "lon"]):
+def forecast_crps(x, y, core_dims=None, ensemble_dim="ensemble"):
+    """CRPS of the ensemble `x` against `y`, broadcast over all other dimensions.
+
+    Only `ensemble_dim` is reduced. Every other dimension of `x` and `y` is
+    broadcast by name and aligned on its coordinates (inner join), so the
+    computation does not depend on which spatial dimensions are used
+    (``station``, ``lat``/``lon``, ``y``/``x``, ...) or on their order.
+
+    `core_dims` names the spatial dimensions; by default every dimension of
+    `x` other than `ensemble_dim` and ``time``. Points where the first member
+    is missing at the first index of every non-spatial dimension (the first
+    lead time) are masked to NaN everywhere. The result has the non-spatial
+    dimensions first, then `core_dims`.
+    """
+    if core_dims is None:
+        core_dims = [d for d in x.dims if d not in (ensemble_dim, "time")]
+    core_dims = list(core_dims)
+    other_dims = [d for d in x.dims if d != ensemble_dim and d not in core_dims]
+
+    first = {dim: 0 for dim in other_dims}
+    first[ensemble_dim] = 0
+    has_data = x.isel(first, drop=True).notnull()
+
     crps = xr.apply_ufunc(
-        crps_masked,
+        _crps_over_last_axis,
         x,
         y,
-        input_core_dims=[["ensemble", *core_dims], core_dims],
+        input_core_dims=[[ensemble_dim], []],
+        output_core_dims=[[]],
         dask="parallelized",
-        output_core_dims=[core_dims],
-        output_dtypes=[np.float32],
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.float64],
         join="inner",
     )
-    return crps
+    crps = crps.where(has_data)
+    return crps.transpose(..., *core_dims)
 
 
 @dask.delayed

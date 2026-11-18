@@ -32,7 +32,6 @@ from hyve.tools import crps_stations
 from hyve.tools.crps_stations import (
     StationMismatchError,
     coord_doy,
-    crps_masked,
     forecast_crps,
     persistence_crps,
 )
@@ -74,15 +73,25 @@ def test_reference_crps_single_member_is_absolute_error():
 
 
 # ---------------------------------------------------------------------------
-# Ensemble CRPS for one step (crps_masked delegates to earthkit-meteo)
+# Ensemble CRPS (forecast_crps delegates to earthkit-meteo)
 # ---------------------------------------------------------------------------
 
 
-def single_step_crps(x, y):
-    """CRPS of one step through crps_masked: x is (ensemble, point...)."""
+def as_ensemble(x, y):
+    """DataArrays for an ensemble `x` (ensemble, point...) and observation `y`."""
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    return crps_masked(x[None, ...], y[None, ...])[0]
+    point_dims = [f"p{i}" for i in range(y.ndim)]
+    return (
+        xr.DataArray(x, dims=("ensemble", *point_dims)),
+        xr.DataArray(y, dims=point_dims),
+    )
+
+
+def single_step_crps(x, y):
+    """CRPS through forecast_crps of `x` (ensemble, point...) against `y`."""
+    fc, obs = as_ensemble(x, y)
+    return forecast_crps(fc, obs).values
 
 
 def test_crps_is_computed_by_earthkit_meteo(monkeypatch):
@@ -98,6 +107,7 @@ def test_crps_is_computed_by_earthkit_meteo(monkeypatch):
     single_step_crps([[1.0], [2.0], [3.0]], [2.0])
     assert calls == ["propagate"]
     assert crps_stations.ensemble_crps is spy
+    assert not hasattr(crps_stations, "crps_masked")
     assert not hasattr(crps_stations, "crps_minmax")
 
 
@@ -158,12 +168,11 @@ def test_crps_is_non_negative():
 
 
 def test_crps_leaves_inputs_unchanged():
-    x = np.array([[[3.0, 1.0], [1.0, 2.0], [2.0, 5.0]]])
-    y = np.array([[2.0, 0.0]])
-    x_before, y_before = x.copy(), y.copy()
-    crps_masked(x, y)
-    np.testing.assert_array_equal(x, x_before)
-    np.testing.assert_array_equal(y, y_before)
+    fc, obs = as_ensemble([[3.0, 1.0], [1.0, 2.0], [2.0, 5.0]], [2.0, 0.0])
+    fc_before, obs_before = fc.copy(deep=True), obs.copy(deep=True)
+    forecast_crps(fc, obs)
+    xr.testing.assert_identical(fc, fc_before)
+    xr.testing.assert_identical(obs, obs_before)
 
 
 def test_crps_nan_observation_gives_nan():
@@ -181,24 +190,33 @@ def test_crps_nan_member_gives_nan():
 
 
 # ---------------------------------------------------------------------------
-# crps_masked
+# forecast_crps: masking of points without forecast data
 # ---------------------------------------------------------------------------
 
 
-def test_crps_masked_scores_each_step_against_its_observation():
+def _steps(x, y):
+    """DataArrays for x (time, ensemble, point) and y (time, point)."""
+    return (
+        xr.DataArray(x, dims=("time", "ensemble", "point")),
+        xr.DataArray(y, dims=("time", "point")),
+    )
+
+
+def test_forecast_crps_scores_each_step_against_its_observation():
     rng = np.random.default_rng(20)
-    x = rng.uniform(0, 10, size=(3, 5, 6))  # step, ensemble, point
+    x = rng.uniform(0, 10, size=(3, 5, 6))
     y = rng.uniform(0, 10, size=(3, 6))
     expected = np.stack([reference_crps(x[i], y[i]) for i in range(3)])
-    assert crps_masked(x.copy(), y) == pytest.approx(expected)
+    result = forecast_crps(*_steps(x, y), core_dims=["point"])
+    assert result.values == pytest.approx(expected)
 
 
-def test_crps_masked_uses_first_step_and_member_as_mask():
+def test_forecast_crps_uses_first_step_and_member_as_mask():
     rng = np.random.default_rng(21)
     x = rng.uniform(0, 10, size=(3, 5, 6))
     y = rng.uniform(0, 10, size=(3, 6))
     x[0, 0, 2] = np.nan
-    result = crps_masked(x.copy(), y)
+    result = forecast_crps(*_steps(x, y), core_dims=["point"]).values
     assert np.isnan(result[:, 2]).all()
     others = [0, 1, 3, 4, 5]
     assert not np.isnan(result[:, others]).any()
@@ -208,16 +226,28 @@ def test_crps_masked_uses_first_step_and_member_as_mask():
         )
 
 
-def test_crps_masked_nan_outside_first_step_and_member_gives_nan_at_that_step():
+def test_forecast_crps_nan_outside_first_step_and_member_gives_nan_at_that_step():
     rng = np.random.default_rng(22)
     x = rng.uniform(0, 10, size=(2, 3, 4))
     y = rng.uniform(0, 10, size=(2, 4))
     x[1, 2, 1] = np.nan
-    result = crps_masked(x.copy(), y)
+    result = forecast_crps(*_steps(x, y), core_dims=["point"]).values
     # the point is not masked: its other step keeps a score
     assert np.isnan(result[1, 1])
     assert np.isfinite(result[0]).all()
     assert np.isfinite(result[1, [0, 2, 3]]).all()
+
+
+def test_forecast_crps_grid_mask_uses_first_step_and_member():
+    rng = np.random.default_rng(23)
+    x = rng.uniform(0, 10, size=(3, 4, 2, 3))  # time, ensemble, lat, lon
+    y = rng.uniform(0, 10, size=(3, 2, 3))
+    x[0, 0, 1, 2] = np.nan
+    fc = xr.DataArray(x, dims=("time", "ensemble", "lat", "lon"))
+    obs = xr.DataArray(y, dims=("time", "lat", "lon"))
+    result = forecast_crps(fc, obs, core_dims=["lat", "lon"]).values
+    assert np.isnan(result[:, 1, 2]).all()
+    assert int(np.isnan(result).sum()) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +306,113 @@ def test_forecast_crps_keeps_only_stations_in_both_inputs():
     np.testing.assert_array_equal(result.station, [3, 4])
     expected = _expected_forecast_crps(fc.sel(station=[3, 4]), obs.sel(station=[3, 4]))
     assert result.values == pytest.approx(expected)
+
+
+def _expected_by_reference(fc, obs, dims):
+    """Reference CRPS with the ensemble first and `dims` after it."""
+    x = fc.transpose("ensemble", *dims).values
+    y = obs.broadcast_like(fc.isel(ensemble=0)).transpose(*dims).values
+    return reference_crps(x, y)
+
+
+@pytest.mark.parametrize(
+    "spatial", [["station"], ["lat", "lon"], ["y", "x"]], ids=lambda d: "_".join(d)
+)
+def test_forecast_crps_any_spatial_dims_without_flattening(spatial):
+    rng = np.random.default_rng(32)
+    sizes = dict(zip(spatial, [4, 3][: len(spatial)]))
+    fc = xr.DataArray(
+        rng.uniform(0, 10, size=(N_STEPS, N_ENSEMBLE, *sizes.values())),
+        dims=("time", "ensemble", *spatial),
+    )
+    obs = xr.DataArray(
+        rng.uniform(0, 10, size=(N_STEPS, *sizes.values())),
+        dims=("time", *spatial),
+    )
+    result = forecast_crps(fc, obs, core_dims=spatial)
+    assert result.dims == ("time", *spatial)
+    expected = _expected_by_reference(fc, obs, ["time", *spatial])
+    assert result.values == pytest.approx(expected)
+
+
+def test_forecast_crps_output_puts_spatial_dims_last_in_given_order():
+    fc, obs = _forecast_and_obs()
+    fc = fc.expand_dims(lat=[50.0, 49.0]).rename(station="lon")
+    obs = obs.expand_dims(lat=[50.0, 49.0]).rename(station="lon")
+    result = forecast_crps(
+        fc.transpose("lon", "ensemble", "lat", "time"),
+        obs.transpose("lon", "lat", "time"),
+        core_dims=["lat", "lon"],
+    )
+    assert result.dims == ("time", "lat", "lon")
+
+
+def test_forecast_crps_broadcasts_extra_forecast_dims():
+    # a dimension only the forecast has (several forecast systems, say) is
+    # kept, and every system is scored against the same observation
+    fc, obs = _forecast_and_obs()
+    systems = xr.concat([fc, fc + 1.0, fc * 2.0], dim="system")
+    result = forecast_crps(systems, obs, core_dims=["station"])
+    assert result.dims == ("system", "time", "station")
+    for i in range(3):
+        expected = _expected_forecast_crps(systems.isel(system=i), obs)
+        assert result.isel(system=i).values == pytest.approx(expected)
+
+
+def test_forecast_crps_broadcasts_observation_missing_a_dim():
+    # an observation without a time dimension applies to every step
+    fc, obs = _forecast_and_obs()
+    single = obs.isel(time=0, drop=True)
+    result = forecast_crps(fc, single, core_dims=["station"])
+    expected = _expected_forecast_crps(fc, single.broadcast_like(obs))
+    assert result.values == pytest.approx(expected)
+
+
+def test_forecast_crps_without_time_dimension():
+    fc, obs = _forecast_and_obs()
+    result = forecast_crps(fc.isel(time=1), obs.isel(time=1), core_dims=["station"])
+    assert result.dims == ("station",)
+    expected = reference_crps(
+        fc.isel(time=1).transpose("ensemble", "station").values,
+        obs.isel(time=1).values,
+    )
+    assert result.values == pytest.approx(expected)
+
+
+def test_forecast_crps_custom_ensemble_dim():
+    fc, obs = _forecast_and_obs()
+    result = forecast_crps(
+        fc.rename(ensemble="number"), obs, core_dims=["station"], ensemble_dim="number"
+    )
+    assert result.values == pytest.approx(_expected_forecast_crps(fc, obs))
+
+
+def test_forecast_crps_aligns_on_time_coordinates():
+    fc, obs = _forecast_and_obs()
+    shifted = obs.isel(time=slice(1, None))  # observation misses the first step
+    result = forecast_crps(fc, shifted, core_dims=["station"])
+    np.testing.assert_array_equal(result.time, shifted.time)
+    expected = _expected_forecast_crps(fc.isel(time=slice(1, None)), shifted)
+    assert result.values == pytest.approx(expected)
+
+
+def test_forecast_crps_dask_chunks_over_spatial_and_ensemble_dims():
+    rng = np.random.default_rng(33)
+    fc = xr.DataArray(
+        rng.uniform(0, 10, size=(N_STEPS, N_ENSEMBLE, 4, 6)),
+        dims=("time", "ensemble", "lat", "lon"),
+    )
+    obs = xr.DataArray(
+        rng.uniform(0, 10, size=(N_STEPS, 4, 6)), dims=("time", "lat", "lon")
+    )
+    result = forecast_crps(
+        fc.chunk({"time": 1, "ensemble": 2, "lat": 2, "lon": 3}),
+        obs.chunk({"time": 1, "lat": 2, "lon": 3}),
+        core_dims=["lat", "lon"],
+    )
+    assert result.chunks is not None
+    expected = _expected_by_reference(fc, obs, ["time", "lat", "lon"])
+    assert result.compute().values == pytest.approx(expected)
 
 
 def test_forecast_crps_with_dask_inputs():
