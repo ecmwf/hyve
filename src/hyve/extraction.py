@@ -258,7 +258,9 @@ def _process_regular(
                 "Increase station.coords.tolerance or set it to null to disable."
             ) from exc
 
-    with ProgressBar(dt=15):
+    # Keep dt short: the ProgressBar joins its timer thread on exit, which
+    # sleeps for dt, so a large dt adds up to dt seconds to every dask compute.
+    with ProgressBar(dt=1):
         result = result.compute()
 
     ds = xr.Dataset({var_name: result}, attrs=ds_attrs)
