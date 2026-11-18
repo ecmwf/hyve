@@ -179,3 +179,6 @@ pyrightconfig.json
 _version.py
 
 .vscode/
+
+# Benchmark results (benchmarks/bench_extraction.py)
+bench-output/
