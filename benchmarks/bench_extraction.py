@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: 2025 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Benchmark: mask-based vs vectorized extraction on EFAS reanalysis data.
 
 Compares four extraction strategies:
-  coord-mask   – current hyve (create_mask_from_coords → apply_mask)
+  coord-mask   – legacy hyve (create_mask_from_coords → apply_mask)
   coord-sel    – proposed xr.DataArray.sel(method="nearest")
-  index-mask   – current hyve (create_mask_from_index → apply_mask)
+  index-mask   – legacy hyve (create_mask_from_index → apply_mask)
   index-isel   – proposed xr.DataArray.isel with vectorized DataArray indices
 
 Usage:
@@ -13,7 +17,6 @@ Usage:
 import argparse
 import csv
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -21,17 +24,85 @@ import earthkit.data as ekd
 import numpy as np
 import pandas as pd
 import xarray as xr
-
-from hyve.extraction import (
-    apply_mask,
-    construct_mask,
-    create_mask_from_coords,
-    create_mask_from_index,
-)
+from dask.diagnostics import ProgressBar
 
 logger = logging.getLogger(__name__)
 
 ALL_METHODS = ["coord-mask", "coord-sel", "index-mask", "index-isel"]
+
+
+# ---------------------------------------------------------------------------
+# Legacy mask-based extraction (copied from hyve before vectorized refactor)
+# ---------------------------------------------------------------------------
+
+
+def construct_mask(x_indices, y_indices, shape):
+    mask = np.zeros(shape, dtype=bool)
+    mask[x_indices, y_indices] = True
+
+    flat_indices = np.ravel_multi_index((x_indices, y_indices), shape)
+    _, duplication_indexes = np.unique(flat_indices, return_inverse=True)
+    return mask, duplication_indexes
+
+
+def create_mask_from_index(df, shape):
+    logger.info(f"Creating mask {shape} from index")
+    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
+    x_indices = df["x_index"].values
+    y_indices = df["y_index"].values
+    if (
+        np.any(x_indices < 0)
+        or np.any(x_indices >= shape[0])
+        or np.any(y_indices < 0)
+        or np.any(y_indices >= shape[1])
+    ):
+        raise ValueError(
+            f"Station indices out of grid bounds. Grid shape={shape}, "
+            f"x_index range=({int(x_indices.min())},{int(x_indices.max())}), "
+            f"y_index range=({int(y_indices.min())},{int(y_indices.max())})"
+        )
+    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
+    return mask, duplication_indexes
+
+
+def create_mask_from_coords(df, gridx, gridy, shape):
+    logger.info(f"Creating mask {shape} from coordinates")
+    logger.debug(f"DataFrame columns: {df.columns.tolist()}")
+    station_x = df["x_coord"].values
+    station_y = df["y_coord"].values
+
+    x_distances = np.abs(station_x[:, np.newaxis] - gridx)
+    x_indices = np.argmin(x_distances, axis=1)
+    y_distances = np.abs(station_y[:, np.newaxis] - gridy)
+    y_indices = np.argmin(y_distances, axis=1)
+
+    mask, duplication_indexes = construct_mask(x_indices, y_indices, shape)
+    return mask, duplication_indexes
+
+
+def mask_array_np(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    return arr[..., mask]
+
+
+def apply_mask(
+    da: xr.DataArray, mask: np.ndarray, coordx: str, coordy: str
+) -> xr.DataArray:
+    task = xr.apply_ufunc(
+        mask_array_np,
+        da,
+        mask,
+        input_core_dims=[(coordx, coordy), (coordx, coordy)],
+        output_core_dims=[["index"]],
+        output_dtypes=[da.dtype],
+        exclude_dims={coordx, coordy},
+        dask="parallelized",
+        dask_gufunc_kwargs={
+            "output_sizes": {"index": int(mask.sum())},
+            "allow_rechunk": True,
+        },
+    )
+    with ProgressBar(dt=15):
+        return task.compute()
 
 
 def build_mars_request(start_date: str, end_date: str) -> dict:
@@ -66,11 +137,17 @@ def to_xarray(source: ekd.core.Base) -> tuple[xr.DataArray, str, str, str]:
     ds = source.to_xarray()
     var_names = [k for k in ds.data_vars if len(ds[k].dims) >= 3]
     if len(var_names) != 1:
-        raise ValueError(f"Expected 1 main variable, found {len(var_names)}: {var_names}")
+        raise ValueError(
+            f"Expected 1 main variable, found {len(var_names)}: {var_names}"
+        )
     var_name = var_names[0]
     da = ds[var_name]
 
-    spatial_dims = [d for d in da.dims if d not in ("time", "step", "number", "forecast_reference_time")]
+    spatial_dims = [
+        d
+        for d in da.dims
+        if d not in ("time", "step", "number", "forecast_reference_time")
+    ]
     if len(spatial_dims) < 2:
         raise ValueError(f"Cannot identify 2 spatial dims from {da.dims}")
 
@@ -102,13 +179,15 @@ def generate_stations(
     x_coords = x_coords + rng.uniform(-1e-4, 1e-4, size=n)
     y_coords = y_coords + rng.uniform(-1e-4, 1e-4, size=n)
 
-    return pd.DataFrame({
-        "station_name": [f"S{i:04d}" for i in range(n)],
-        "x_index": x_indices,
-        "y_index": y_indices,
-        "x_coord": x_coords,
-        "y_coord": y_coords,
-    })
+    return pd.DataFrame(
+        {
+            "station_name": [f"S{i:04d}" for i in range(n)],
+            "x_index": x_indices,
+            "y_index": y_indices,
+            "x_coord": x_coords,
+            "y_coord": y_coords,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +198,10 @@ def generate_stations(
 def extract_coord_mask(
     da: xr.DataArray, df: pd.DataFrame, x_dim: str, y_dim: str
 ) -> xr.Dataset:
-    """Current hyve approach: coord → mask → apply_ufunc."""
+    """Legacy hyve approach: coord → mask → apply_ufunc."""
     shape = (da[x_dim].shape[0], da[y_dim].shape[0])
     mask, dup_idx = create_mask_from_coords(
-        df.rename(columns={"x_coord": "x_coord", "y_coord": "y_coord"}),
+        df,
         da[x_dim].values,
         da[y_dim].values,
         shape,
@@ -151,7 +230,7 @@ def extract_coord_sel(
 def extract_index_mask(
     da: xr.DataArray, df: pd.DataFrame, x_dim: str, y_dim: str
 ) -> xr.Dataset:
-    """Current hyve approach: index → mask → apply_ufunc."""
+    """Legacy hyve approach: index → mask → apply_ufunc."""
     shape = (da[x_dim].shape[0], da[y_dim].shape[0])
     mask, dup_idx = create_mask_from_index(df, shape)
     masked_da = apply_mask(da, mask, x_dim, y_dim)
@@ -196,7 +275,7 @@ def timed(label: str, fn, *args, **kwargs):
 def save_extracted_data(ds: xr.Dataset, method: str, data_dir: Path) -> None:
     """Save extracted dataset as a CSV (station × time)."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    var_name = [v for v in ds.data_vars if v != "station"][0]
+    var_name = next(v for v in ds.data_vars if v != "station")
     df = ds[var_name].to_dataframe().reset_index()
     df.to_csv(data_dir / f"{method}.csv", index=False)
 
@@ -205,17 +284,29 @@ def main():
     parser = argparse.ArgumentParser(
         description="Benchmark mask-based vs vectorized extraction"
     )
-    parser.add_argument("--start-date", default="20200101", help="First hdate (YYYYMMDD)")
-    parser.add_argument("--end-date", default="20200110", help="Last hdate (YYYYMMDD)")
-    parser.add_argument("--n-stations", type=int, default=500, help="Number of random stations")
     parser.add_argument(
-        "--methods", default="all",
+        "--start-date", default="20200101", help="First hdate (YYYYMMDD)"
+    )
+    parser.add_argument("--end-date", default="20200110", help="Last hdate (YYYYMMDD)")
+    parser.add_argument(
+        "--n-stations", type=int, default=500, help="Number of random stations"
+    )
+    parser.add_argument(
+        "--methods",
+        default="all",
         help="Comma-separated methods or 'all': coord-mask,coord-sel,index-mask,index-isel",
     )
-    parser.add_argument("--materialize-early", action="store_true",
-                        help="Call .compute() on DataArray before extraction")
-    parser.add_argument("--output", default="benchmarks/results.csv", help="Timing CSV path")
-    parser.add_argument("--data-dir", default="benchmarks/data", help="Dir for per-method data CSVs")
+    parser.add_argument(
+        "--materialize-early",
+        action="store_true",
+        help="Call .compute() on DataArray before extraction",
+    )
+    parser.add_argument(
+        "--output", default="benchmarks/results.csv", help="Timing CSV path"
+    )
+    parser.add_argument(
+        "--data-dir", default="benchmarks/data", help="Dir for per-method data CSVs"
+    )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -240,7 +331,7 @@ def main():
     timings.append({"phase": "load", "method": "-", "seconds": t_load})
 
     # --- Phase 2: Convert to xarray ---
-    (da, var_name, x_dim, y_dim), t_xr = timed("to_xarray", to_xarray, source)
+    (da, _var_name, x_dim, y_dim), t_xr = timed("to_xarray", to_xarray, source)
     timings.append({"phase": "to_xarray", "method": "-", "seconds": t_xr})
 
     # --- Phase 3: Optionally materialize early ---
@@ -250,7 +341,13 @@ def main():
 
     # --- Phase 4: Generate stations ---
     df, t_stations = timed(
-        "generate_stations", generate_stations, da, x_dim, y_dim, args.n_stations, args.seed
+        "generate_stations",
+        generate_stations,
+        da,
+        x_dim,
+        y_dim,
+        args.n_stations,
+        args.seed,
     )
     timings.append({"phase": "generate_stations", "method": "-", "seconds": t_stations})
 
