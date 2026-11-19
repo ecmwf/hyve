@@ -140,9 +140,9 @@ def test_build_request(bench):
     assert efas["hdate"] == ["20200101", "20200102", "20200103"]
     assert efas["stream"] == "efcl" and efas["param"] == "240023"
     glofas = bench.build_request("glofas", "20200101", "20200103")
-    assert glofas["date"] == ["20200101", "20200102", "20200103"]
+    assert glofas["hdate"] == ["20200101", "20200102", "20200103"]
+    assert glofas["date"] == "2022-10-01"
     assert glofas["stream"] == "wfcl" and glofas["param"] == "240024"
-    assert "hdate" not in glofas
     with pytest.raises(bench.BenchmarkError):
         bench.build_request("nope", "20200101", "20200103")
 
