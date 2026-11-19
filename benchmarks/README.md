@@ -61,12 +61,12 @@ The requests are built from `--start-date/--end-date` (daily):
 - `efas`: class=ce, expver=0001, stream=efcl, date=20230101, model=lisflood,
   domain=g, origin=ecmf, step=6, type=sfo, levtype=sfc, param=240023,
   time=00/06/12/18, `hdate` = the days.
-- `glofas`: class=ce, expver=1, stream=wfcl, model=global_lisflood, type=sfo,
-  levtype=sfc, param=240024, time=00:00, `date` = the days.
+- `glofas`: class=ce, expver=1, stream=wfcl, date=2022-10-01,
+  model=global_lisflood, type=sfo, levtype=sfc, param=240024, time=00:00,
+  `hdate` = the days.
 
-**The GloFAS date key is unconfirmed.** The script puts the list of days in
-`date`, not `hdate`. Check this with the first GloFAS run; if MARS rejects the
-request, change it in `build_request`.
+Both use `hdate` for the list of days, with a fixed `date`. This was confirmed
+by the first EFAS and GloFAS runs on HPC.
 
 Dimension names: `--x-dim` and `--y-dim` set the two spatial dimensions and
 default to `latitude` and `longitude` (x is the first axis of the station

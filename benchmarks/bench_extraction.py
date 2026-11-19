@@ -154,8 +154,7 @@ def apply_mask(
 def build_request(dataset: str, start_date: str, end_date: str) -> dict:
     """Build the MARS request for ``dataset`` over a daily date range.
 
-    EFAS reanalysis uses an ``hdate`` list. For GloFAS the list of days goes
-    in ``date``; this key is unconfirmed (see benchmarks/README.md).
+    Both datasets put the list of days in ``hdate``, with a fixed ``date``.
     """
     if dataset not in DATASETS:
         raise BenchmarkError(f"Unknown dataset {dataset!r}. Choose from {DATASETS}")
@@ -191,7 +190,8 @@ def build_request(dataset: str, start_date: str, end_date: str) -> dict:
         "levtype": "sfc",
         "param": "240024",
         "time": "00:00",
-        "date": days,
+        "date": "2022-10-01",
+        "hdate": days,
     }
 
 
