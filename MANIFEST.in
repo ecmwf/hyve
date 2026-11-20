@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# setuptools_scm adds every git-tracked file to the sdist; leave out CI and
+# editor configuration that is not needed to build, test or license-check.
+prune .github
+exclude .pre-commit-config.yaml .flake8 .gitignore
