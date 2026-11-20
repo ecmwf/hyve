@@ -22,10 +22,10 @@ class CoordMapping(StrictBaseModel):
 
     Notes
     -----
-    ``tolerance`` is the maximum distance between a station coordinate and the
-    nearest grid coordinate, in the units of the grid's coordinates (e.g.
-    degrees for lat/lon grids, metres for projected grids). If ``None``
-    (default), the nearest grid point is always used, however far away it is.
+    ``tolerance`` is the maximum allowed offset, checked separately for each axis,
+    between a station coordinate and the nearest grid coordinate on that axis,
+    in the grid's coordinate units (e.g. degrees or metres). ``None`` (default)
+    disables the check.
     """
 
     x: str = "opt_x_coord"
