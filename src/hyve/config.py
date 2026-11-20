@@ -5,7 +5,7 @@
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictBaseModel(BaseModel):
@@ -30,7 +30,7 @@ class CoordMapping(StrictBaseModel):
 
     x: str = "opt_x_coord"
     y: str = "opt_y_coord"
-    tolerance: Optional[float] = None
+    tolerance: Optional[float] = Field(default=None, ge=0)
 
 
 class GridCoords(StrictBaseModel):
