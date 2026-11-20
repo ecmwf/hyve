@@ -517,6 +517,55 @@ def test_coord_extraction_with_descending_latitudes(descending_lat_grid_data, tm
     )
 
 
+def test_coord_extraction_halfway_station_takes_larger_coordinate(
+    descending_lat_grid_data, tmp_path
+):
+    """A station exactly halfway between two grid points goes to the larger coordinate.
+
+    The tie is broken per axis, independently of the stored grid order: here
+    latitudes descend (north-to-south) and longitudes ascend, and in both cases
+    the cell with the larger coordinate value must win. All values are exactly
+    representable in binary floating point, so the ties are exact.
+
+    NOTE: this guards user-facing behaviour. If it starts failing, check whether
+    the change is intended and, if so, update the ``hyve-extract-timeseries``
+    section of README.md.
+    """
+    csv_path = tmp_path / "stations.csv"
+    pd.DataFrame(
+        {
+            "station_id": ["BOTH", "LAT_ONLY", "LON_ONLY"],
+            # lat grid: 43, 42, 41, 40; lon grid: 10, 11, 12
+            "lat": [41.5, 40.5, 43.0],
+            "lon": [10.5, 12.0, 11.5],
+        }
+    ).to_csv(csv_path, index=False)
+
+    config = {
+        "station": {
+            "file": str(csv_path),
+            "name": "station_id",
+            "coords": {"x": "lat", "y": "lon"},
+        },
+        "grid": {
+            "source": {
+                "name": "list-of-dicts",
+                "options": {"list_of_dicts": descending_lat_grid_data},
+            },
+            "coords": {"x": "latitude", "y": "longitude"},
+        },
+    }
+
+    result = _extract(config)["temperature"]
+
+    # lat 41.5 -> 42, lon 10.5 -> 11: values 21, 121 (not lat=41, lon=10: 10, 110)
+    np.testing.assert_allclose(result.sel(station="BOTH").values, [21.0, 121.0])
+    # lat 40.5 -> 41, lon=12: values 12, 112 (not lat=40: 2, 102)
+    np.testing.assert_allclose(result.sel(station="LAT_ONLY").values, [12.0, 112.0])
+    # lat=43, lon 11.5 -> 12: values 32, 132 (not lon=11: 31, 131)
+    np.testing.assert_allclose(result.sel(station="LON_ONLY").values, [32.0, 132.0])
+
+
 # ---------------------------------------------------------------------------
 # test-happy-path-gaps: Fill gaps in existing happy-path tests
 # ---------------------------------------------------------------------------
