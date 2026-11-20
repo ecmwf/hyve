@@ -5,7 +5,7 @@
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictBaseModel(BaseModel):
@@ -18,8 +18,19 @@ class IndexMapping(StrictBaseModel):
 
 
 class CoordMapping(StrictBaseModel):
+    """Column names for coordinate-based station mapping.
+
+    Notes
+    -----
+    ``tolerance`` is the maximum allowed offset, checked separately for each axis,
+    between a station coordinate and the nearest grid coordinate on that axis,
+    in the grid's coordinate units (e.g. degrees or metres). ``None`` (default)
+    disables the check.
+    """
+
     x: str = "opt_x_coord"
     y: str = "opt_y_coord"
+    tolerance: Optional[float] = Field(default=None, ge=0)
 
 
 class GridCoords(StrictBaseModel):
