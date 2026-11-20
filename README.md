@@ -33,30 +33,48 @@ Hyve is a library and toolkit for hydrological verification.
 
 ## Installation
 
+Get the latest release from PyPI
+
+```
+pip install hydro-verification
+```
+
+or, for unreleased changes,
+
 ```
 pip install git+https://github.com/ecmwf/hyve.git@main
 ```
 
 ### Development
 
-Install project with uv
+After cloning locally, install the project with uv >= 0.13.5
 
 ```
-# (Optional) Create and activate virtual environment
-uv venv .venv --python 3.10
-source .venv/bin/activate
+# Create the virtual environment and install hyve with its development dependencies
+uv sync
 
-# Install hyve with development dependencies
-uv pip install -e ".[dev]"
-
-# Install pre-commit hooks
-pre-commit install
-
-# Run tests
-pytest
+# Install the pre-commit hooks
+uv run pre-commit install
 ```
 
-## Inputs
+Run tests
+```
+uv run pytest
+```
+
+## CLI tools
+
+With a local installation, run one of the CLI tools
+
+```
+uv run hyve-extract-timeseries --help
+```
+
+or run a tool without installing hyve first (outside a local clone)
+
+```
+uv run --with git+https://github.com/ecmwf/hyve.git@main hyve-extract-timeseries --help
+```
 
 ### `hyve-forecast-crps`
 
@@ -74,6 +92,32 @@ The reanalysis may not have any other dimension (such as `ensemble` or
 `system`); otherwise the tool exits with a dimension mismatch error. The
 reforecast grid is the reference and the other inputs are matched to it, see
 [Troubleshooting](#hyve-forecast-crps-stations-or-grids-cannot-be-matched).
+
+### `hyve-extract-timeseries`
+
+`hyve-extract-timeseries` extracts a time series at each station from a gridded
+source. The config says how each station is placed on the grid, using one of
+these mappings:
+
+- **Index mapping** (`station.index`): the station file gives the grid indices of
+  each station. The indices refer to the grid as stored in the source; the grid is
+  not sorted. Compute the indices on the same grid layout that is extracted, for
+  example with the same latitude order (north-to-south or south-to-north).
+- **Coordinate mapping** (`station.coords`): the station file gives coordinates, and
+  each station is placed on the nearest grid point. The nearest point is chosen
+  separately on each axis, so it does not matter in which order the grid is stored.
+
+If a station lies exactly halfway between two grid points on an axis, it goes to
+the grid point with the larger coordinate value. This holds whether the grid
+coordinates ascend or descend. Earlier versions picked the smaller coordinate, so
+a few stations on exact midpoints may now move by one grid cell.
+
+`station.coords.tolerance` is optional. It is the largest offset allowed between a
+station and its nearest grid point, checked separately on each axis, in the units
+of the grid's coordinates (for example degrees). It must be zero or positive. If it
+is not set (the default), there is no check and every station is placed on its nearest
+grid point. If a station is further away than the tolerance, the extraction stops
+with an error.
 
 ## Troubleshooting
 
