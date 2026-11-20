@@ -47,7 +47,7 @@ def find_main_var(ds: xr.Dataset, min_dim: int = 2) -> str:
 def load_da(
     ds_config: dict[str, Any], n_dims: int, variable: str | None = None
 ) -> tuple[xr.DataArray, str, dict[str, Any]]:
-    """Load a DataArray from an earthkit source configuration.
+    """Load a DataArray from an earthkit-data source configuration.
 
     Parameters
     ----------
