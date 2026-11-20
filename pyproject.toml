@@ -61,6 +61,7 @@ gribjump = [
     hyve-extract-timeseries = "hyve.cli:extractor_cli"
     hyve-hydrostats = "hyve.cli:stat_calc_cli"
     hyve-clim-benchmark = "hyve.tools.clim_benchmark:main"
+    hyve-forecast-crps = "hyve.tools.forecast_crps:main"
     hyve-crps-stations = "hyve.tools.crps_stations:main"
 
 [tool.pytest]
@@ -82,7 +83,7 @@ line_length = 88
 line-length = 88
 
 [tool.setuptools.packages.find]
-include = [ "hyve" ]
+include = [ "hyve*" ]
 where = [ "src/" ]
 
 [tool.setuptools_scm]

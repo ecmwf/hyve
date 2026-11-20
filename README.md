@@ -56,23 +56,61 @@ pre-commit install
 pytest
 ```
 
+## Inputs
+
+### `hyve-forecast-crps`
+
+The variable `dis` of each input has exactly these dimensions (any order). The
+spatial dimensions are chosen with `--spatial_dims` (default `station`, for
+example `lat lon` or `y x`) or `--core_dim` for a single one.
+
+| Input        | `dis` dimensions                                  |
+| ------------ | ------------------------------------------------- |
+| Reanalysis   | `time`, *spatial dims*                            |
+| Reforecast   | `ensemble`, `time`, *spatial dims* (one file per date) |
+| Climatology  | `ensemble`, `doy`, `issue_hour`, *spatial dims*   |
+
+The reanalysis may not have any other dimension (such as `ensemble` or
+`system`); otherwise the tool exits with a dimension mismatch error. The
+reforecast grid is the reference and the other inputs are matched to it, see
+[Troubleshooting](#hyve-forecast-crps-stations-or-grids-cannot-be-matched).
+
 ## Troubleshooting
 
-### `hyve-crps-stations`: station IDs cannot be matched
+### `hyve-forecast-crps`: stations or grids cannot be matched
 
-`hyve-crps-stations` matches stations between the reanalysis, the reforecast files
-and the (optional) climatology by their IDs. It exits with status 1 and a one-line
-`Error: ...` message on stderr in two cases:
+`hyve-forecast-crps` matches the reanalysis, the reforecast files and the
+(optional) climatology by their station IDs or grid coordinates. The reforecast
+grid is the reference: reanalysis and climatology are relabelled to its
+coordinate values (and output files carry them), and only points present in
+both are scored. The latest reforecast file (by sorted name) defines the grid
+and every other file must cover it. A mismatch exits with status 1 and a
+one-line `Error: ...` message on stderr. The message names the dimension, both
+datasets and, for float grids, the tolerance. There are three kinds:
 
-- *Station IDs of different kinds*: one dataset has integer IDs (for example
-  `int64`) and another has text IDs (for example `"1"`) or byte-string IDs. The message names both
-  datasets, their dtypes, station counts and a few sample IDs.
-- *No stations in common*: the datasets use the same kind of ID but no ID appears
-  in both. This includes a climatology that shares no station with the reanalysis.
+- *Station mismatch* (`StationMismatchError`): station IDs of different kinds
+  (integer vs text vs bytes, never converted), no ID in common, or a reforecast
+  file lacking a reference station, or duplicate IDs. Fix the ID type or the
+  duplicates upstream and rerun.
+- *Grid mismatch* (`GridMismatchError`): the same problems for `lat`, `lon`,
+  `y`, `x`, plus ambiguous tolerances, NaN/infinite coordinates and duplicate
+  coordinates (of any type, integer or float).
+- *Dimension mismatch* (`DimensionMismatchError`): a dataset has no `lat` (or
+  other `--spatial_dims`) dimension, or the reanalysis has a dimension other
+  than `time` and the spatial dimensions. Set `--spatial_dims` (or `--core_dim`) to
+  the dimensions the files actually have.
 
-IDs are never converted, so integer `1` and text `"1"` are different stations.
-To fix it, make the station ID type consistent upstream (in the extraction or
-the dataset that holds the odd ID type) and rerun.
+Float coordinates (`lat`, `lon`, projected metres) match within a tolerance
+relative to their precision, 4 x the machine epsilon of the coarser dtype, so a
+float32 grid matches the same float64 grid. Integer coordinates (station IDs,
+integer `y`/`x`) match exactly. If grids differ by more (for example a
+rounded-coordinate file), pass an absolute tolerance in coordinate units:
+`--coord_tolerance 0.001` (finite, >= 0).
+
+*Ambiguous* means the tolerance is at least half the smallest grid spacing (or
+two values snap to one point): a value could match two cells, so nothing is
+matched. Lower `--coord_tolerance` or remove it, and check the coordinates.
+The old name `hyve-crps-stations` still works but is deprecated.
 
 ## License
 ### License headers
