@@ -13,3 +13,11 @@ path = ["uv.lock"]
 precedence = "closest"
 SPDX-FileCopyrightText = "2026 European Centre for Medium-Range Weather Forecasts (ECMWF)"
 SPDX-License-Identifier = "Apache-2.0"
+
+# Cover the CI manifest and job-script recipe, and the workflows the ci-infrastructure
+# regenerator writes, which cannot keep a header.
+[[annotations]]
+path = [".ci/**", ".github/workflows/**"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 European Centre for Medium-Range Weather Forecasts (ECMWF)"
+SPDX-License-Identifier = "Apache-2.0"

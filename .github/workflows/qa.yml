@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2025 European Centre for Medium-Range Weather Forecasts (ECMWF)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: qa
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  qa-pre-commit:
+    uses: ecmwf/reusable-workflows/.github/workflows/qa-precommit-run.yml@v2
+    secrets: inherit
+
+  test:
+    uses: ecmwf/reusable-workflows/.github/workflows/qa-pytest-pyproject.yml@v2
+    secrets: inherit
+
+  # qa-python:
+  #     uses: ecmwf/reusable-workflows/.github/workflows/ci-python.yml@v2
+  #     secrets: inherit
