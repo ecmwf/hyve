@@ -13,6 +13,7 @@ import sys
 import dask
 import xarray as xr
 
+from hyve.tools.forecast_crps.chunks import chunk_spatially
 from hyve.tools.forecast_crps.crps import check_dims
 from hyve.tools.forecast_crps.errors import CoordinateMismatchError
 from hyve.tools.forecast_crps.matching import match_coords, narrow, relabel
@@ -30,12 +31,29 @@ def _coord_tolerance(text):
     return value
 
 
+def _positive_int(text):
+    """argparse type: an integer >= 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be >= 1")
+    return value
+
+
 def main():
 
     parser = argparse.ArgumentParser(prog="hyve-forecast-crps")
     parser.add_argument("--reanalysis", required=True, help="reanalysis dataset file")
     parser.add_argument("--reforecast", required=True, help="reforecast dataset folder")
-    parser.add_argument("--climatology", help="reanalysis dataset file")
+    parser.add_argument(
+        "--climatology",
+        help=(
+            "climatology dataset file with dimensions ensemble, doy, issue_hour"
+            " and the spatial dimensions (optional)"
+        ),
+    )
     parser.add_argument(
         "--output", help="output folder for individual crps values", default="."
     )
@@ -64,15 +82,36 @@ def main():
         ),
     )
     parser.add_argument(
+        "--chunk_size",
+        type=_positive_int,
+        default=None,
+        help=(
+            "read every input lazily, in chunks of about this many spatial"
+            " points per chunk; peak memory is close to the data held in memory"
+            " plus threads x 8 x chunk bytes, counted in float64 (default: read"
+            " whole files)"
+        ),
+    )
+    parser.add_argument(
+        "--threads",
+        type=_positive_int,
+        default=None,
+        help="number of dask threads (default: one per CPU core)",
+    )
+    parser.add_argument(
         "--with_init",
         action="store_true",
-        help="Activate if reforecast dataset does not include initial condition",
+        help=(
+            "the first time step of each reforecast file is the initial"
+            " condition, which is then also the persistence forecast; without"
+            " it the persistence date is one time step before the first step"
+        ),
     )
     parser.add_argument(
         "--scheduler",
         default="threads",
         choices=["synchronous", "threads"],
-        help="reanalysis dataset file",
+        help="dask scheduler (default: threads)",
     )
     parser.add_argument(
         "--log",
@@ -104,16 +143,40 @@ def spatial_dims_from_args(args):
     return ["station"]
 
 
+def open_climatology(path, spatial_dims, chunk_size=None):
+    """Climatology data array, chunked by day of year and spatial points.
+
+    The climatology has no time dimension; one day of year per chunk means a
+    forecast reads only the days it is scored against.
+    """
+    da = xr.open_dataarray(path)
+    return chunk_spatially(da, spatial_dims, chunk_size, extra={"doy": 1})
+
+
+def dask_settings(args):
+    """dask configuration for the scheduler and thread count of `args`."""
+    settings = {"scheduler": getattr(args, "scheduler", None) or "threads"}
+    threads = getattr(args, "threads", None)
+    if threads is not None:
+        settings["num_workers"] = threads
+    return settings
+
+
 def run(args):
     log.info("Computing the scoring using crps approach")
 
-    with dask.config.set(scheduler="threads"):
+    with dask.config.set(**dask_settings(args)):
 
         spatial_dims = spatial_dims_from_args(args)
         log.info(f"Spatial dimensions: {spatial_dims}")
+        chunk_size = getattr(args, "chunk_size", None)
+        if chunk_size is not None:
+            log.info(f"Reading inputs in chunks of about {chunk_size} points")
 
         # read reanalysis dataset
-        ds_reanalysis = xr.open_dataset(args.reanalysis)
+        ds_reanalysis = chunk_spatially(
+            xr.open_dataset(args.reanalysis), spatial_dims, chunk_size
+        )
 
         # the reanalysis holds only time and the spatial dimensions
         check_dims(
@@ -152,7 +215,7 @@ def run(args):
 
         ds_clim = None
         if args.climatology:
-            ds_clim = xr.open_dataarray(args.climatology, chunks={"time": 1})
+            ds_clim = open_climatology(args.climatology, spatial_dims, chunk_size)
             matches = match_coords(
                 ds_reanalysis,
                 ds_clim,
@@ -178,6 +241,7 @@ def run(args):
             spatial_dims,
             args.with_init,
             tolerance,
+            chunk_size=chunk_size,
         )
 
 
