@@ -75,6 +75,28 @@ The reanalysis may not have any other dimension (such as `ensemble` or
 reforecast grid is the reference and the other inputs are matched to it, see
 [Troubleshooting](#hyve-forecast-crps-stations-or-grids-cannot-be-matched).
 
+### `hyve-forecast-crps`: memory
+
+By default every input file is read whole. For large domains, read them lazily
+in chunks over the spatial dimensions and fix the number of threads:
+
+```shell
+hyve-forecast-crps --reanalysis reanalysis.nc --reforecast forecasts/ \
+    --climatology climatology.nc --spatial_dims point \
+    --chunk_size 5000 --threads 4
+```
+
+`--chunk_size` is the number of spatial points per chunk; with several spatial
+dimensions the first one is split into rows of whole slices of the others. The
+climatology is also chunked by day of year, so a forecast reads only the days it
+is scored against. Peak memory is close to the data held in memory plus
+threads x 8 x chunk bytes, where a chunk holds every ensemble member and time
+step of its points counted in float64 (the CRPS is computed in float64 even for
+float32 files): 51 members, 40 steps and 5,000 points make 82 MB, so 4 threads
+need about 2.6 GB on top of the outputs. The scores do not depend on
+the chunk size. `--scheduler synchronous` runs everything in one thread, for
+debugging.
+
 ## Troubleshooting
 
 ### `hyve-forecast-crps`: stations or grids cannot be matched

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from hyve.tools.forecast_crps.chunks import chunk_spatially
 from hyve.tools.forecast_crps.crps import forecast_crps, persistence_crps
 from hyve.tools.forecast_crps.matching import (
     check_covers_reference,
@@ -86,6 +87,7 @@ def compute_score(
     spatial_dims,
     with_init=False,
     coord_tolerance=None,
+    chunk_size=None,
 ):
     """Score every reforecast file against the reanalysis and write the results.
 
@@ -131,7 +133,9 @@ def compute_score(
 
         log.info("- {}: {}".format(ifile, os.path.basename(reforecast_path)))
         file_name = f"reforecast file {os.path.basename(reforecast_path)}"
-        ds_reforecast = xr.open_dataset(reforecast_path)
+        ds_reforecast = chunk_spatially(
+            xr.open_dataset(reforecast_path), spatial_dims, chunk_size
+        )
 
         # the reanalysis already carries the reference values: match the file
         # to them, and require that it covers every reference point
@@ -192,10 +196,12 @@ def compute_score(
                 .rename(doy="time")
             )
             crps_clim = forecast_crps(climatology, reanalysis, core_dims=spatial_dims)
-            crps_refo, crps_clim = dask.compute(crps_refo, crps_clim)
+            crps_refo, crps_pers, crps_clim = dask.compute(
+                crps_refo, crps_pers, crps_clim
+            )
             crps_clim = _onto_reference(crps_clim, ref_coords, spatial_dims)
         else:
-            (crps_refo,) = dask.compute(crps_refo)
+            crps_refo, crps_pers = dask.compute(crps_refo, crps_pers)
         crps_refo = _onto_reference(crps_refo, ref_coords, spatial_dims)
         crps_pers = _onto_reference(crps_pers, ref_coords, spatial_dims)
 
